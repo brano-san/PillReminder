@@ -1,6 +1,9 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package tech.unispace.pillreminder.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,11 +19,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -31,29 +37,24 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.alarm.formatAmount
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.today
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import java.time.format.TextStyle
-import java.util.Locale
 
-/**
- * Вся статистика в одном месте: журнал по дням с недельной лентой
- * и тепловая карта дисциплины на месяц.
- */
+/** История: журнал по дням и тепловая карта. Вкладки листаются свайпом. */
 @Composable
 fun StatsScreen(
     journal: JournalState,
@@ -63,16 +64,32 @@ fun StatsScreen(
     onUndo: (Long) -> Unit,
     contentPadding: PaddingValues,
 ) {
-    var tab by remember { mutableIntStateOf(0) }
+    val s = Lang.s
+    val pager = rememberPagerState(pageCount = { 2 })
+    val scope = rememberCoroutineScope()
+    val titles = listOf(s.tabJournal, s.tabCalendar)
 
     Column(Modifier.fillMaxSize().padding(top = contentPadding.calculateTopPadding())) {
-        TabRow(selectedTabIndex = tab) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text(Lang.s.tabJournal) })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text(Lang.s.tabCalendar) })
+        TabRow(selectedTabIndex = pager.currentPage) {
+            titles.forEachIndexed { index, title ->
+                Tab(
+                    selected = pager.currentPage == index,
+                    onClick = { scope.launch { pager.animateScrollToPage(index) } },
+                    text = { Text(title, maxLines = 1, softWrap = false) },
+                )
+            }
         }
-        when (tab) {
-            0 -> JournalTab(journal, onSelectDay, onUndo, contentPadding)
-            1 -> HeatmapTab(heatmap, onMonthShift, onSelectDay, goToJournal = { tab = 0 }, contentPadding)
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+            when (page) {
+                0 -> JournalTab(journal, onSelectDay, onUndo, contentPadding)
+                else -> HeatmapTab(
+                    heatmap,
+                    onMonthShift,
+                    onSelectDay,
+                    goToJournal = { scope.launch { pager.animateScrollToPage(0) } },
+                    contentPadding,
+                )
+            }
         }
     }
 }
@@ -88,41 +105,23 @@ private fun JournalTab(
 ) {
     Column(Modifier.fillMaxSize()) {
         WeekStrip(selected = state.day, onSelectDay = onSelectDay)
-
         LazyColumn(
             Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 16.dp,
-                end = 16.dp,
-                top = 4.dp,
-                bottom = contentPadding.calculateBottomPadding() + 16.dp,
-            ),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item(key = "wake") {
                 Card(Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Default.WbSunny,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.WbSunny, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            if (state.wakeAt != null) {
-                                "Подъём в " + formatClock(state.wakeAt)
-                            } else {
-                                "Подъём не отмечен"
-                            },
+                            if (state.wakeAt != null) Lang.s.wakeAtLabel(formatClock(state.wakeAt)) else Lang.s.wakeNotMarked,
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
                 }
             }
-
             if (state.doses.isEmpty()) {
                 item(key = "empty") {
                     Text(
@@ -133,10 +132,7 @@ private fun JournalTab(
                     )
                 }
             }
-
-            items(state.doses, key = { it.id }) { dose ->
-                DoseRow(dose, onUndo)
-            }
+            items(state.doses, key = { it.id }) { dose -> DoseRow(dose, onUndo) }
         }
     }
 }
@@ -147,10 +143,7 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
     val weekStart = selectedDate.with(DayOfWeek.MONDAY)
     val todayDay = today()
 
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { onSelectDay(selected - 7) }) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = Lang.s.weekPrev)
         }
@@ -164,22 +157,13 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .clickable { onSelectDay(day) }
-                        .background(
-                            when {
-                                isSelected -> MaterialTheme.colorScheme.primary
-                                else -> Color.Transparent
-                            },
-                            RoundedCornerShape(12.dp),
-                        )
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(12.dp))
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     Text(
                         date.dayOfWeek.getDisplayName(TextStyle.SHORT, Lang.s.locale),
                         style = MaterialTheme.typography.labelSmall,
-                        color = when {
-                            isSelected -> MaterialTheme.colorScheme.onPrimary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
                         date.dayOfMonth.toString(),
@@ -203,31 +187,25 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
 @Composable
 private fun DoseRow(dose: Dose, onUndo: (Long) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier
-                    .width(10.dp)
-                    .height(10.dp)
-                    .background(
-                        when (dose.status) {
-                            DoseStatus.TAKEN -> Color(0xFF4CAF50)
-                            DoseStatus.SKIPPED -> Color(0xFFE53935)
-                            DoseStatus.PENDING -> Color(0xFFFFC107)
-                        },
-                        CircleShape,
-                    ),
+                Modifier.width(10.dp).height(10.dp).background(
+                    when (dose.status) {
+                        DoseStatus.TAKEN -> Color(0xFF4CAF50)
+                        DoseStatus.SKIPPED -> Color(0xFFE53935)
+                        DoseStatus.PENDING -> Color(0xFFFFC107)
+                    },
+                    CircleShape,
+                ),
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(dose.medNameSnapshot.ifBlank { Lang.s.pillFab }, fontWeight = FontWeight.SemiBold)
                 val when0 = dose.takenAt ?: dose.plannedAt
                 val label = when (dose.status) {
-                    DoseStatus.TAKEN -> "Выпито в " + formatClock(when0)
-                    DoseStatus.SKIPPED -> "Пропущено в " + formatClock(when0)
-                    DoseStatus.PENDING -> "Запланировано на " + formatClock(dose.plannedAt)
+                    DoseStatus.TAKEN -> Lang.s.takenAt(formatClock(when0))
+                    DoseStatus.SKIPPED -> Lang.s.skippedAt(formatClock(when0))
+                    DoseStatus.PENDING -> Lang.s.plannedAt(formatClock(dose.plannedAt))
                 }
                 Text(
                     label + " · " + Lang.s.planLabel(formatClock(dose.plannedAt)) + " · " + formatAmount(dose.amount),
@@ -236,18 +214,13 @@ private fun DoseRow(dose: Dose, onUndo: (Long) -> Unit) {
                 )
             }
             if (dose.status != DoseStatus.PENDING) {
-                TextButton(onClick = { onUndo(dose.id) }) { Text(Lang.s.undo) }
+                TextButton(onClick = { onUndo(dose.id) }) { Text(Lang.s.undo, maxLines = 1, softWrap = false) }
             }
         }
     }
 }
 
 // ---------- Тепловая карта ----------
-
-private val monthNames = listOf(
-    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
-)
 
 @Composable
 private fun HeatmapTab(
@@ -259,20 +232,11 @@ private fun HeatmapTab(
 ) {
     val start = state.monthStart
     val daysInMonth = start.lengthOfMonth()
-    // Понедельник = 0 … воскресенье = 6.
     val firstCellOffset = start.dayOfWeek.value - 1
     val todayDay = today()
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onMonthShift(-1) }) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = Lang.s.weekPrev)
             }
@@ -285,12 +249,20 @@ private fun HeatmapTab(
             IconButton(onClick = { onMonthShift(1) }) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = Lang.s.weekNext)
             }
+            val thisMonth = LocalDate.now().withDayOfMonth(1)
+            if (start != thisMonth) {
+                IconButton(onClick = {
+                    onMonthShift(ChronoUnit.MONTHS.between(start, thisMonth))
+                    onSelectDay(todayDay)
+                }) {
+                    Icon(Icons.Default.Today, contentDescription = Lang.s.toToday)
+                }
+            }
         }
-
         Row(Modifier.fillMaxWidth()) {
-            listOf("пн", "вт", "ср", "чт", "пт", "сб", "вс").forEach { d ->
+            (1..7).forEach { d ->
                 Text(
-                    d,
+                    DayOfWeek.of(d).getDisplayName(TextStyle.SHORT, Lang.s.locale),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -298,7 +270,6 @@ private fun HeatmapTab(
                 )
             }
         }
-
         val totalCells = firstCellOffset + daysInMonth
         val rows = (totalCells + 6) / 7
         (0 until rows).forEach { r ->
@@ -307,10 +278,9 @@ private fun HeatmapTab(
                     val dayOfMonth = r * 7 + c - firstCellOffset + 1
                     if (dayOfMonth in 1..daysInMonth) {
                         val day = start.plusDays((dayOfMonth - 1).toLong()).toEpochDay()
-                        val heat = state.days[day]
                         HeatCell(
                             dayOfMonth = dayOfMonth,
-                            heat = heat,
+                            heat = state.days[day],
                             isToday = day == todayDay,
                             isFuture = day > todayDay,
                             modifier = Modifier.weight(1f),
@@ -325,15 +295,8 @@ private fun HeatmapTab(
                 }
             }
         }
-
         Spacer(Modifier.height(4.dp))
-        Text(
-            "Чем зеленее день, тем дисциплиннее пились таблетки. Пропуски и невыпитое " +
-                "делают день бледнее. Серый — приёмов не планировалось. " +
-                "Нажатие на день открывает его журнал.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text(Lang.s.heatLegend, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(contentPadding.calculateBottomPadding()))
     }
 }
@@ -347,36 +310,30 @@ private fun HeatCell(
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
-    val green = Color(0xFF2E7D32)
+    val hasData = !isFuture && heat != null && heat.planned > 0
+    val ratio = if (hasData) heat!!.taken.toFloat() / heat.planned else 0f
     val background = when {
-        isFuture || heat == null || heat.planned == 0 ->
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        else -> {
-            val ratio = heat.taken.toFloat() / heat.planned
-            // От бледного к насыщенному зелёному; полный ноль — заметно красноватый.
-            if (ratio == 0f) Color(0xFFE53935).copy(alpha = 0.35f)
-            else green.copy(alpha = 0.2f + 0.8f * ratio)
-        }
+        !hasData -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ratio == 0f -> Color(0xFFE53935).copy(alpha = 0.55f)
+        else -> Color(0xFF2E7D32).copy(alpha = 0.25f + 0.75f * ratio)
     }
-    Box(
-        modifier
-            .aspectRatio(1f)
-            .background(background, RoundedCornerShape(8.dp))
-            .then(
-                if (isToday) {
-                    Modifier.background(Color.Transparent, RoundedCornerShape(8.dp))
-                } else {
-                    Modifier
-                },
-            )
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
+    val textColor = when {
+        !hasData -> MaterialTheme.colorScheme.onSurface
+        ratio >= 0.5f -> Color.White
+        else -> Color(0xFF1B1B1B)
+    }
+    val cellModifier = modifier
+        .aspectRatio(1f)
+        .background(background, RoundedCornerShape(8.dp))
+        .then(if (isToday) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)) else Modifier)
+        .clickable { onClick() }
+
+    Box(cellModifier, contentAlignment = Alignment.Center) {
         Text(
             dayOfMonth.toString(),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-            color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            color = textColor,
         )
     }
 }

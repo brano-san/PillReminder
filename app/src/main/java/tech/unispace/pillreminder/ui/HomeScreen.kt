@@ -1,16 +1,20 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+)
 
 package tech.unispace.pillreminder.ui
 
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,23 +30,28 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Air
-import androidx.compose.material.icons.filled.Grain
-import androidx.compose.material.icons.filled.Healing
-import androidx.compose.material.icons.filled.MedicalServices
-import androidx.compose.material.icons.filled.Medication
-import androidx.compose.material.icons.filled.Science
-import androidx.compose.material.icons.filled.Vaccines
-import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Grain
+import androidx.compose.material.icons.filled.Healing
+import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.MedicalServices
+import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Vaccines
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,27 +67,33 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.alarm.formatAmount
 import tech.unispace.pillreminder.alarm.trackerDisplayName
+import tech.unispace.pillreminder.data.Dose
+import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.data.epochDayOf
 import tech.unispace.pillreminder.data.today
 
 /** Иконка формы выпуска — своя для каждой формы. */
-fun formIcon(form: String): androidx.compose.ui.graphics.vector.ImageVector = when (form) {
+fun formIcon(form: String): ImageVector = when (form) {
     "Таблетка", "Pill" -> Icons.Default.Medication
     "Инъекция", "Injection" -> Icons.Default.Vaccines
     "Раствор", "Solution" -> Icons.Default.Science
@@ -88,6 +103,13 @@ fun formIcon(form: String): androidx.compose.ui.graphics.vector.ImageVector = wh
     "Свечи", "Suppository" -> Icons.Default.Healing
     else -> Icons.Default.MedicalServices
 }
+
+private val GREEN = Color(0xFF4CAF50)
+private val AMBER = Color(0xFFFFC107)
+private val RED = Color(0xFFE53935)
+
+/** За сколько до планового времени отметка «выпил» считается преждевременной. */
+const val EARLY_TAKE_THRESHOLD_MS = 60 * 60_000L
 
 @Composable
 fun HomeScreen(
@@ -106,21 +128,20 @@ fun HomeScreen(
     onReorder: (List<Long>) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTracker: (Long) -> Unit,
+    onOpenTips: () -> Unit,
+    onOpenTutorial: () -> Unit,
+    onOpenReport: () -> Unit,
 ) {
     val s = Lang.s
     val context = LocalContext.current
+    val compact = Settings(context).homeCompact
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    /** Показать снекбар с «Вернуть» после отметки приёма. */
     fun confirmWithUndo(message: String, doseId: Long) {
         scope.launch {
             snackbars.currentSnackbarData?.dismiss()
-            val result = snackbars.showSnackbar(
-                message = message,
-                actionLabel = s.undo,
-                duration = SnackbarDuration.Short,
-            )
+            val result = snackbars.showSnackbar(message = message, actionLabel = s.undo, duration = SnackbarDuration.Short)
             if (result == SnackbarResult.ActionPerformed) onUndo(doseId)
         }
     }
@@ -135,15 +156,11 @@ fun HomeScreen(
 
     var deleteTarget by remember { mutableStateOf<MedRow?>(null) }
     deleteTarget?.let { row ->
-        ConfirmDeleteDialog(
-            title = row.med.name,
-            onConfirm = { onDelete(row.med.id) },
-            onDismiss = { deleteTarget = null },
-        )
+        ConfirmDeleteDialog(title = row.med.name, onConfirm = { onDelete(row.med.id) }, onDismiss = { deleteTarget = null })
     }
-    // Перепроверяем раз в минуту (и после каждого возврата на экран).
     val minuteKey = state.now / 60_000
     val deliveryFine = remember(minuteKey) { deliveryOk(context) }
+    val showWakeButton = state.wokeUpAt == null && state.loaded
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -160,66 +177,45 @@ fun HomeScreen(
                 item(key = "delivery-warning") {
                     Card(
                         Modifier.fillMaxWidth().clickable { onOpenSettings() },
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                        ),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                     ) {
-                        Row(
-                            Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                            )
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(
-                                    s.deliveryWarnTitle,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                )
-                                Text(
-                                    s.deliveryWarnBody,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                )
+                                Text(s.deliveryWarnTitle, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onErrorContainer)
+                                Text(s.deliveryWarnBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
                             }
                         }
                     }
                 }
             }
 
-            item { WakeCard(state, onWakeUp) }
+            item(key = "wake") { WakeCard(state, onWakeUp, onOpenTips, onOpenTutorial, onOpenReport) }
 
             if (state.rows.isEmpty() && state.loaded) {
-                item { EmptyHint() }
+                item(key = "empty") { EmptyHint() }
             }
 
-            // «Выпить всё, что пора» — когда наступило время сразу нескольких таблеток.
-            val dueCount = orderedRows.count { r ->
-                r.nextDose?.let { it.plannedAt <= state.now } == true
-            }
+            val dueCount = orderedRows.count { r -> r.nextDose?.let { it.plannedAt <= state.now } == true }
             if (dueCount >= 2) {
                 item(key = "take-all") {
-                    Button(
-                        onClick = { onTakeAll() },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                    ) {
+                    Button(onClick = onTakeAll, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(s.takeAllBtn(dueCount))
+                        Text(s.takeAllBtn(dueCount), maxLines = 1, softWrap = false)
                     }
                 }
             }
 
             items(orderedRows, key = { it.med.id }) { row ->
                 val id = row.med.id
+                val isDragging = draggingId == id
                 MedCard(
                     row = row,
                     now = state.now,
                     awake = state.wokeUpAt != null,
+                    compact = compact,
                     onTake = { doseId ->
                         onTake(doseId)
                         confirmWithUndo(s.snackTaken(row.med.name), doseId)
@@ -232,10 +228,16 @@ fun HomeScreen(
                     onEdit = onEdit,
                     onLongPress = { deleteTarget = it },
                     cardModifier = Modifier
+                        // Модификатор стабилен между кадрами: тянущаяся карточка просто без
+                        // анимации размещения — иначе при смене цепочки она «телепортируется».
+                        .animateItem(placementSpec = if (isDragging) null else spring<IntOffset>())
                         .onGloballyPositioned { itemHeights[id] = it.size.height }
-                        .zIndex(if (draggingId == id) 1f else 0f)
+                        .zIndex(if (isDragging) 1f else 0f)
                         .graphicsLayer {
-                            translationY = if (draggingId == id) dragOffset else 0f
+                            translationY = if (isDragging) dragOffset else 0f
+                            val sc = if (isDragging) 1.02f else 1f
+                            scaleX = sc
+                            scaleY = sc
                         },
                     dragHandleModifier = Modifier.pointerInput(id) {
                         detectDragGestures(
@@ -250,20 +252,14 @@ fun HomeScreen(
                                 val spacing = 12.dp.toPx()
                                 if (dragOffset > 0 && idx < order.lastIndex) {
                                     val step = (itemHeights[order[idx + 1]] ?: 0) + spacing
-                                    if (step > 0 && dragOffset > step * 0.6f) {
-                                        order = order.toMutableList().apply {
-                                            removeAt(idx)
-                                            add(idx + 1, id)
-                                        }
+                                    if (step > 0 && dragOffset > step * 0.5f) {
+                                        order = order.toMutableList().apply { removeAt(idx); add(idx + 1, id) }
                                         dragOffset -= step
                                     }
                                 } else if (dragOffset < 0 && idx > 0) {
                                     val step = (itemHeights[order[idx - 1]] ?: 0) + spacing
-                                    if (step > 0 && -dragOffset > step * 0.6f) {
-                                        order = order.toMutableList().apply {
-                                            removeAt(idx)
-                                            add(idx - 1, id)
-                                        }
+                                    if (step > 0 && -dragOffset > step * 0.5f) {
+                                        order = order.toMutableList().apply { removeAt(idx); add(idx - 1, id) }
                                         dragOffset += step
                                     }
                                 }
@@ -282,87 +278,101 @@ fun HomeScreen(
                 )
             }
 
-            // Напоминалки трекеров: записаны ли данные сегодня.
             items(trackerRows, key = { "tracker-" + it.tracker.id }) { row ->
                 TrackerReminderCard(row, onOpenTracker)
             }
-
-            if (state.wokeUpAt == null) {
-                // Место под закреплённую снизу кнопку «я проснулся».
-                item(key = "wake-spacer") { Spacer(Modifier.height(64.dp)) }
-            }
         }
 
-        // Кнопка «я проснулся» закреплена внизу — до неё легко дотянуться большим пальцем.
-        if (state.wokeUpAt == null && state.loaded) {
-            Button(
-                onClick = onWakeUp,
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(
-                        start = 16.dp,
-                        end = 16.dp,
-                        bottom = contentPadding.calculateBottomPadding() + 88.dp,
-                    )
-                    .height(58.dp),
-            ) {
-                Icon(Icons.Default.WbSunny, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text(s.iWokeUp, style = MaterialTheme.typography.titleMedium)
+        // Нижняя строка: «Я проснулся» слева (пока день не начат) и «+ Таблетка» справа.
+        Row(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (showWakeButton) {
+                Button(
+                    onClick = onWakeUp,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.weight(1f).height(56.dp),
+                ) {
+                    Icon(Icons.Default.WbSunny, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(s.iWokeUp, style = MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false)
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
             }
+            ExtendedFloatingActionButton(
+                onClick = onAdd,
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text(s.pillFab, maxLines = 1, softWrap = false) },
+            )
         }
-
-        ExtendedFloatingActionButton(
-            onClick = onAdd,
-            icon = { Icon(Icons.Default.Add, contentDescription = null) },
-            text = { Text(s.pillFab) },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
-        )
 
         SnackbarHost(
             hostState = snackbars,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = contentPadding.calculateBottomPadding() + 80.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = contentPadding.calculateBottomPadding() + 84.dp),
         )
     }
 }
 
 @Composable
-private fun WakeCard(state: HomeState, onWakeUp: () -> Unit) {
+private fun WakeCard(
+    state: HomeState,
+    onWakeUp: () -> Unit,
+    onOpenTips: () -> Unit,
+    onOpenTutorial: () -> Unit,
+    onOpenReport: () -> Unit,
+) {
     val s = Lang.s
+    var confirmShift by remember { mutableStateOf(false) }
+    if (confirmShift) {
+        AlertDialog(
+            onDismissRequest = { confirmShift = false },
+            title = { Text(s.shiftConfirmTitle) },
+            text = { Text(s.shiftConfirmBody) },
+            confirmButton = { TextButton(onClick = { confirmShift = false; onWakeUp() }) { Text(s.shiftDay) } },
+            dismissButton = { TextButton(onClick = { confirmShift = false }) { Text(s.cancel) } },
+        )
+    }
+
     ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            if (state.wokeUpAt == null) {
-                // Сама кнопка закреплена внизу экрана — тут только пояснение.
-                Text(s.goodMorning, style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    s.wakeIntro,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.WbSunny,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.WbSunny, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    if (state.wokeUpAt == null) {
+                        Text(s.goodMorning, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(s.wakeIntro, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
                         Text(s.wokeAt(formatClock(state.wokeUpAt)), fontWeight = FontWeight.SemiBold)
-                        Text(
-                            s.dayPlanned,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Text(s.dayPlanned, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    TextButton(onClick = onWakeUp) { Text(s.shiftDay) }
+                }
+                if (state.wokeUpAt != null) {
+                    TextButton(onClick = { confirmShift = true }) { Text(s.shiftDay, maxLines = 1, softWrap = false) }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            FlowRow {
+                TextButton(onClick = onOpenTips, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Icon(Icons.Default.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(s.tipsButton)
+                }
+                TextButton(onClick = onOpenTutorial, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(s.tutorialBtn)
+                }
+                TextButton(onClick = onOpenReport, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(s.reportBtn)
                 }
             }
         }
@@ -377,39 +387,22 @@ private fun TrackerReminderCard(row: TrackerRow, onOpen: (Long) -> Unit) {
     val doneToday = lastDay == today()
 
     Card(Modifier.fillMaxWidth().clickable { onOpen(row.tracker.id) }) {
-        Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                trackerIcon(row.tracker.type),
-                contentDescription = null,
-                tint = if (doneToday) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary,
-            )
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(trackerIcon(row.tracker.type), contentDescription = null, tint = if (doneToday) GREEN else MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    trackerDisplayName(row.tracker.type),
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Text(trackerDisplayName(row.tracker.type), fontWeight = FontWeight.SemiBold)
                 Text(
                     when {
                         last != null && doneToday -> s.trackerDoneToday(formatClock(last.atMillis))
-                        last != null -> s.trackerNotToday + ", " +
-                            s.lastEntryAgo(today() - lastDay!!)
+                        last != null -> s.trackerNotToday + ", " + s.lastEntryAgo(today() - lastDay!!)
                         else -> s.trackerNotToday + ", " + s.neverRecorded
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (doneToday) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
+                    color = if (doneToday) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                 )
             }
-            if (doneToday) {
-                Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF4CAF50))
-            }
+            if (doneToday) Icon(Icons.Default.Check, contentDescription = null, tint = GREEN)
         }
     }
 }
@@ -420,13 +413,24 @@ private fun EmptyHint() {
         Column(Modifier.padding(16.dp)) {
             Text(Lang.s.emptyTitle, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
-            Text(
-                Lang.s.emptyBody,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(Lang.s.emptyBody, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+/** Маленькая «таблетка»-метка с фактом о лекарстве; переносится строкой во FlowRow. */
+@Composable
+private fun InfoPill(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    )
 }
 
 @Composable
@@ -434,6 +438,7 @@ private fun MedCard(
     row: MedRow,
     now: Long,
     awake: Boolean,
+    compact: Boolean,
     onTake: (Long) -> Unit,
     onTakeNow: (Long) -> Unit,
     onSkip: (Long) -> Unit,
@@ -444,26 +449,53 @@ private fun MedCard(
 ) {
     val s = Lang.s
     val next = row.nextDose
+
+    // Отметка «выпил» больше чем за час до плана — скорее ошибка, чем намерение: переспрашиваем.
+    var earlyDose by remember { mutableStateOf<Dose?>(null) }
+    earlyDose?.let { d ->
+        val leftMin = ((d.plannedAt - System.currentTimeMillis()) / 60_000L).toInt().coerceAtLeast(1)
+        AlertDialog(
+            onDismissRequest = { earlyDose = null },
+            title = { Text(s.earlyTitle) },
+            text = { Text(s.earlyBody(formatClock(d.plannedAt), s.duration(leftMin))) },
+            confirmButton = { TextButton(onClick = { earlyDose = null; onTake(d.id) }) { Text(s.earlyConfirm) } },
+            dismissButton = { TextButton(onClick = { earlyDose = null }) { Text(s.cancel) } },
+        )
+    }
+    fun takeChecked(d: Dose) {
+        if (d.plannedAt - System.currentTimeMillis() > EARLY_TAKE_THRESHOLD_MS) earlyDose = d else onTake(d.id)
+    }
     val overdue = next != null && next.plannedAt <= now
     val done = row.dueToday && next == null && row.takenToday > 0
     val hasPlan = next != null || row.takenToday > 0
 
-    // Обводка — прогресс дня одним взглядом: зелёная — всё выпито,
-    // жёлтая — начато, но не всё, красная — ещё ничего.
     val border = when {
         row.med.asNeeded || !row.dueToday || !awake || !hasPlan -> null
-        next == null && row.takenToday > 0 -> BorderStroke(2.dp, Color(0xFF4CAF50))
-        row.takenToday > 0 -> BorderStroke(2.dp, Color(0xFFFFC107))
-        else -> BorderStroke(2.dp, Color(0xFFE53935))
+        next == null && row.takenToday > 0 -> BorderStroke(2.dp, GREEN)
+        row.takenToday > 0 -> BorderStroke(2.dp, AMBER)
+        else -> BorderStroke(2.dp, RED)
+    }
+
+    // Факты о лекарстве — отдельными метками, чтобы длинный набор переносился аккуратно.
+    val pills = buildList {
+        add(listOf(row.med.form, row.med.doseInfo).filter { it.isNotBlank() }.joinToString(" "))
+        add(s.perIntake(formatAmount(row.med.dosesPerIntake, row.med.form)))
+        row.med.stockCount?.let { add(s.stockLeft(if (it % 1.0 == 0.0) it.toInt().toString() else it.toString())) }
+        if (!compact) {
+            add(
+                when {
+                    row.med.asNeeded -> s.asNeededShort
+                    row.linkedParentName != null -> s.afterMed(row.linkedParentName, s.duration(row.med.linkedDelayMinutes))
+                    else -> s.schedule(row.med.timesPerDay, row.med.intervalMinutes, row.med.everyNDays)
+                },
+            )
+        }
     }
 
     Card(
         cardModifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = { onEdit(row.med.id) },
-                onLongClick = { onLongPress(row) },
-            ),
+            .combinedClickable(onClick = { onEdit(row.med.id) }, onLongClick = { onLongPress(row) }),
         border = border,
         colors = CardDefaults.cardColors(
             containerColor = when {
@@ -473,14 +505,9 @@ private fun MedCard(
             },
         ),
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = if (compact) 8.dp else 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    formIcon(row.med.form),
-                    contentDescription = row.med.form,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
-                )
+                Icon(formIcon(row.med.form), contentDescription = row.med.form, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(10.dp))
                 Text(
                     row.med.name,
@@ -488,122 +515,92 @@ private fun MedCard(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
-                // Ручка перетаскивания: тянуть за неё, карточка едет по списку.
-                Icon(
-                    Icons.Default.DragHandle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = dragHandleModifier.size(28.dp),
-                )
-                IconButton(onClick = { onEdit(row.med.id) }) {
-                    Icon(Icons.Default.Edit, contentDescription = s.edit)
+                if (next != null && awake && row.dueToday) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            formatClock(next.plannedAt),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            s.countdown(next.plannedAt - now),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+                Icon(Icons.Default.DragHandle, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = dragHandleModifier.padding(start = 6.dp).size(28.dp))
+                if (compact) {
+                    when {
+                        row.med.asNeeded -> FilledTonalIconButton(onClick = { onTakeNow(row.med.id) }) { Icon(Icons.Default.Check, contentDescription = s.takeNow) }
+                        next != null && awake -> FilledTonalIconButton(onClick = { takeChecked(next) }) { Icon(Icons.Default.Check, contentDescription = s.took) }
+                        else -> IconButton(onClick = { onEdit(row.med.id) }) { Icon(Icons.Default.Edit, contentDescription = s.edit) }
+                    }
+                } else {
+                    IconButton(onClick = { onEdit(row.med.id) }) { Icon(Icons.Default.Edit, contentDescription = s.edit) }
                 }
             }
 
-            Text(
-                buildString {
-                    append(row.med.form)
-                    if (row.med.doseInfo.isNotBlank()) {
-                        append(" ")
-                        append(row.med.doseInfo)
-                    }
-                    append(" · ")
-                    append(s.perIntake(formatAmount(row.med.dosesPerIntake)))
-                    row.med.stockCount?.let {
-                        append(" · ")
-                        append(s.stockLeft(if (it % 1.0 == 0.0) it.toInt().toString() else it.toString()))
-                    }
-                    append(" · ")
-                    append(
-                        when {
-                            row.med.asNeeded -> s.asNeededShort
-                            row.linkedParentName != null -> s.afterMed(
-                                row.linkedParentName,
-                                s.duration(row.med.linkedDelayMinutes),
-                            )
-                            else -> s.schedule(
-                                row.med.timesPerDay,
-                                row.med.intervalMinutes,
-                                row.med.everyNDays,
-                            )
-                        },
-                    )
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Spacer(Modifier.height(6.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(end = 8.dp),
+            ) {
+                pills.forEach { InfoPill(it) }
+            }
+
+            if (compact) return@Column
 
             if (row.med.comment.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
-                Row(
-                    Modifier
+                Text(
+                    row.med.comment,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            MaterialTheme.colorScheme.tertiaryContainer,
-                            RoundedCornerShape(10.dp),
-                        )
+                        .padding(end = 8.dp)
+                        .background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(10.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                ) {
-                    Text(
-                        row.med.comment,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                    )
-                }
+                )
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
-            when {
-                row.med.asNeeded -> {
-                    if (row.takenToday > 0) {
-                        StatusLine(s.takenTodayCount(row.takenToday))
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    Button(
-                        onClick = { onTakeNow(row.med.id) },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(s.takeNow)
-                    }
-                }
-                !row.dueToday -> StatusLine(s.notTodayEveryN(row.med.everyNDays))
-                !awake -> StatusLine(s.waitingWake)
-                next == null && row.takenToday == 0 && row.linkedParentName != null ->
-                    StatusLine(s.waitsFor(row.linkedParentName))
-                next == null -> StatusLine(s.allDone(row.takenToday, row.totalToday))
-                else -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                formatClock(next.plannedAt) + " · " + s.countdown(next.plannedAt - now),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                            )
-                            Text(
-                                s.intakeOf(next.indexInDay + 1, row.totalToday),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+            Box(Modifier.fillMaxWidth().padding(end = 8.dp)) {
+                when {
+                    row.med.asNeeded -> Column {
+                        if (row.takenToday > 0) {
+                            StatusLine(s.takenTodayCount(row.takenToday))
+                            Spacer(Modifier.height(8.dp))
                         }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { onTake(next.id) },
-                            modifier = Modifier.weight(1f).height(48.dp),
-                        ) {
+                        Button(onClick = { onTakeNow(row.med.id) }, modifier = Modifier.fillMaxWidth().height(46.dp)) {
                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text(s.took)
+                            Text(s.takeNow, maxLines = 1, softWrap = false)
                         }
-                        OutlinedButton(
-                            onClick = { onSkip(next.id) },
-                            modifier = Modifier.height(48.dp),
-                        ) {
-                            Text(s.skip)
+                    }
+                    !row.dueToday -> StatusLine(s.notTodayEveryN(row.med.everyNDays))
+                    !awake -> StatusLine(s.waitingWake)
+                    next == null && row.takenToday == 0 && row.linkedParentName != null -> StatusLine(s.waitsFor(row.linkedParentName))
+                    next == null -> StatusLine(s.allDone(row.takenToday, row.totalToday))
+                    else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            s.intakeOf(next.indexInDay + 1, row.totalToday),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedButton(onClick = { onSkip(next.id) }, modifier = Modifier.height(44.dp)) { Text(s.skip, maxLines = 1, softWrap = false) }
+                        Button(onClick = { takeChecked(next) }, modifier = Modifier.height(44.dp)) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.took, maxLines = 1, softWrap = false)
                         }
                     }
                 }
@@ -618,5 +615,7 @@ private fun StatusLine(text: String) {
         text,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth(),
     )
 }

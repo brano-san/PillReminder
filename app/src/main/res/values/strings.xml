@@ -1,3 +1,6 @@
 <resources>
-    <string name="app_name">Таблетки</string>
+    <string name="app_name">День приёма</string>
+    <string name="widget_preview_title">Таблетки</string>
+    <string name="widget_preview_line1">08:00  Витамин D</string>
+    <string name="widget_preview_line2">12:00  Магний B6</string>
 </resources>

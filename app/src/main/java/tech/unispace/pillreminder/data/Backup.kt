@@ -102,7 +102,8 @@ object Backup {
                     put(
                         JSONObject()
                             .put("name", e.name)
-                            .put("period", e.period)
+                            .put("startEpochDay", e.startEpochDay ?: JSONObject.NULL)
+                            .put("endEpochDay", e.endEpochDay ?: JSONObject.NULL)
                             .put("effect", e.effect)
                             .put("feeling", e.feeling)
                             .put("photoUri", e.photoUri ?: JSONObject.NULL),
@@ -119,8 +120,7 @@ object Backup {
                         JSONObject()
                             .put("id", t.id)
                             .put("type", t.type)
-                            .put("everyNDays", t.everyNDays)
-                            .put("askAtMinutes", t.askAtMinutes)
+                            .put("askTimes", t.askTimes)
                             .put("startEpochDay", t.startEpochDay)
                             .put("remindEnabled", t.remindEnabled)
                             .put("heightCm", t.heightCm)
@@ -256,7 +256,8 @@ object Backup {
             db.libraryDao().upsert(
                 MedLibraryEntry(
                     name = o.getString("name"),
-                    period = o.optString("period"),
+                    startEpochDay = if (o.isNull("startEpochDay")) null else o.getLong("startEpochDay"),
+                    endEpochDay = if (o.isNull("endEpochDay")) null else o.getLong("endEpochDay"),
                     effect = o.optString("effect"),
                     feeling = o.optString("feeling"),
                     photoUri = if (o.isNull("photoUri")) null else o.getString("photoUri"),
@@ -271,8 +272,7 @@ object Backup {
             val newId = db.trackerDao().upsert(
                 Tracker(
                     type = o.getString("type"),
-                    everyNDays = o.optInt("everyNDays", 1),
-                    askAtMinutes = o.optInt("askAtMinutes", 600),
+                    askTimes = o.optString("askTimes", "600"),
                     startEpochDay = o.optLong("startEpochDay", today()),
                     remindEnabled = o.optBoolean("remindEnabled", true),
                     heightCm = o.optInt("heightCm", 0),

@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "f8f38331c8a4f1d04b10567f662bf5f4",
+    "identityHash": "51e9ac44a36bb2909bbbd6a4926416bd",
     "entities": [
       {
         "tableName": "groups",
@@ -380,7 +380,7 @@
       },
       {
         "tableName": "med_library",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `period` TEXT NOT NULL, `effect` TEXT NOT NULL, `feeling` TEXT NOT NULL, `photoUri` TEXT)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `startEpochDay` INTEGER, `endEpochDay` INTEGER, `effect` TEXT NOT NULL, `feeling` TEXT NOT NULL, `photoUri` TEXT)",
         "fields": [
           {
             "fieldPath": "id",
@@ -395,10 +395,16 @@
             "notNull": true
           },
           {
-            "fieldPath": "period",
-            "columnName": "period",
-            "affinity": "TEXT",
-            "notNull": true
+            "fieldPath": "startEpochDay",
+            "columnName": "startEpochDay",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "endEpochDay",
+            "columnName": "endEpochDay",
+            "affinity": "INTEGER",
+            "notNull": false
           },
           {
             "fieldPath": "effect",
@@ -430,7 +436,7 @@
       },
       {
         "tableName": "trackers",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `type` TEXT NOT NULL, `everyNDays` INTEGER NOT NULL, `askAtMinutes` INTEGER NOT NULL, `startEpochDay` INTEGER NOT NULL, `remindEnabled` INTEGER NOT NULL, `heightCm` INTEGER NOT NULL, `sex` TEXT NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `type` TEXT NOT NULL, `askTimes` TEXT NOT NULL, `startEpochDay` INTEGER NOT NULL, `remindEnabled` INTEGER NOT NULL, `heightCm` INTEGER NOT NULL, `sex` TEXT NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
@@ -445,15 +451,9 @@
             "notNull": true
           },
           {
-            "fieldPath": "everyNDays",
-            "columnName": "everyNDays",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "askAtMinutes",
-            "columnName": "askAtMinutes",
-            "affinity": "INTEGER",
+            "fieldPath": "askTimes",
+            "columnName": "askTimes",
+            "affinity": "TEXT",
             "notNull": true
           },
           {
@@ -581,7 +581,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f8f38331c8a4f1d04b10567f662bf5f4')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '51e9ac44a36bb2909bbbd6a4926416bd')"
     ]
   }
 }

@@ -68,7 +68,7 @@ class ReminderReceiver : BroadcastReceiver() {
                     ""
                 } else {
                     buildString {
-                        append(formatAmount(dose.amount))
+                        append(formatAmount(dose.amount, med.form))
                         if (med.comment.isNotBlank()) {
                             append(" · ")
                             append(med.comment)

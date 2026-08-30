@@ -124,8 +124,10 @@ data class DoctorVisit(
 data class MedLibraryEntry(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
-    /** Период приёма: «март–май 2026». */
-    val period: String = "",
+    /** Начало приёма (epochDay); null — не указано. */
+    val startEpochDay: Long? = null,
+    /** Конец приёма (epochDay); null — ещё принимаю / не указано. */
+    val endEpochDay: Long? = null,
     /** На что влияет. */
     val effect: String = "",
     /** Самочувствие, побочки. */
@@ -147,10 +149,8 @@ data class Tracker(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     /** Один из [TrackerType]. */
     val type: String,
-    /** Спрашивать раз в N дней. */
-    val everyNDays: Int = 1,
-    /** Во сколько спрашивать, минут от полуночи. */
-    val askAtMinutes: Int = 600,
+    /** Во сколько спрашивать: минуты от полуночи через запятую («600,1200») — N раз в день. */
+    val askTimes: String = "600",
     /** День создания — якорь для периодичности. */
     val startEpochDay: Long,
     val remindEnabled: Boolean = true,
@@ -181,3 +181,8 @@ data class TrackerEntry(
     /** Сон: пометки через запятую («кофе, маска»). */
     val tags: String = "",
 )
+
+/** Разобрать [Tracker.askTimes] в отсортированный список минут. */
+fun Tracker.askTimesList(): List<Int> =
+    askTimes.split(',').mapNotNull { it.trim().toIntOrNull() }.filter { it in 0 until 24 * 60 }
+        .distinct().sorted().ifEmpty { listOf(600) }

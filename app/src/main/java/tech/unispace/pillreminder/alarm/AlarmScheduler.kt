@@ -95,4 +95,4 @@ class AlarmScheduler(private val context: Context) {
 }
 
 /** «1 таблетка» / "1 pill" — язык берётся из настроек. */
-fun formatAmount(amount: Double): String = Lang.s.pills(amount)
+fun formatAmount(amount: Double, form: String = "Таблетка"): String = Lang.s.pills(amount, form)

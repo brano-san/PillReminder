@@ -1,8 +1,10 @@
 package tech.unispace.pillreminder.alarm
 
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.os.PowerManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -125,6 +127,9 @@ object Notifications {
             .setStyle(NotificationCompat.BigTextStyle().bigText(fullText))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            // Публичная видимость: на заблокированном экране контент не скрывается,
+            // иначе некоторые оболочки не показывают полноэкранный интент.
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             // Каждый повтор должен снова звучать, а не появляться молча.
             .setOnlyAlertOnce(false)
@@ -136,18 +141,31 @@ object Notifications {
         if (fullScreen) {
             // Со заблокированным/погасшим экраном система откроет AlarmActivity во весь экран,
             // при разблокированном покажет обычное heads-up уведомление.
+            val alarmIntent = Intent(context, AlarmActivity::class.java)
+                .setData(Uri.parse("pill://fullscreen/" + doseId))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(EXTRA_DOSE_ID, doseId)
+                .putExtra(AlarmActivity.EXTRA_TITLE, title)
+                .putExtra(AlarmActivity.EXTRA_TEXT, fullText)
             val fsi = PendingIntent.getActivity(
                 context,
                 doseId.toInt(),
-                Intent(context, AlarmActivity::class.java)
-                    .setData(Uri.parse("pill://fullscreen/" + doseId))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    .putExtra(EXTRA_DOSE_ID, doseId)
-                    .putExtra(AlarmActivity.EXTRA_TITLE, title)
-                    .putExtra(AlarmActivity.EXTRA_TEXT, fullText),
+                alarmIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             builder.setFullScreenIntent(fsi, true)
+            // На разблокированном экране система full-screen intent не открывает (только heads-up).
+            // Если пользователь дал «показ поверх других приложений» — открываем экран сами.
+            val pm = context.getSystemService(PowerManager::class.java)
+            val km = context.getSystemService(KeyguardManager::class.java)
+            val unlocked = pm?.isInteractive == true && km?.isKeyguardLocked == false
+            if (unlocked && android.provider.Settings.canDrawOverlays(context)) {
+                try {
+                    context.startActivity(alarmIntent)
+                } catch (_: Exception) {
+                    // Оболочка запретила — остаётся обычное уведомление.
+                }
+            }
         }
 
         notifySafely(context, doseId.toInt(), builder)

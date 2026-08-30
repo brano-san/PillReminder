@@ -11,6 +11,9 @@
     <!-- Без этого приложения просто нет в системном списке доступа к «Не беспокоить». -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Без этого приложения нет в списке «Поверх других приложений» — а он нужен, чтобы открыть
+         экран будильника на разблокированном телефоне (Notifications.show). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".App"

@@ -19,6 +19,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import tech.unispace.pillreminder.data.epochDayOf
+import tech.unispace.pillreminder.data.today
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -113,83 +119,73 @@ fun ConfirmDeleteDialog(
     )
 }
 
-// ---------- Вкладка «Заметки / Врачи / Каталог» ----------
+// ---------- Вкладка «Записи»: заметки · врачи · каталог ----------
 
 @Composable
-fun NotesScreen(
+fun RecordsScreen(
     notes: List<Note>,
     visits: List<DoctorVisit>,
     library: List<MedLibraryEntry>,
     onOpenNote: (Long) -> Unit,
     onAddNote: () -> Unit,
+    onDeleteNote: (Long) -> Unit,
     onEditVisit: (Long) -> Unit,
     onAddVisit: () -> Unit,
+    onDeleteVisit: (Long) -> Unit,
     onEditLibrary: (Long) -> Unit,
     onAddLibrary: () -> Unit,
-    onDeleteNote: (Long) -> Unit,
-    onDeleteVisit: (Long) -> Unit,
     onDeleteLibrary: (Long) -> Unit,
     contentPadding: PaddingValues,
 ) {
     val s = Lang.s
-    var tab by remember { mutableIntStateOf(0) }
+    val pager = rememberPagerState(pageCount = { 3 })
+    val scope = rememberCoroutineScope()
+    val titles = listOf(s.notesTab2, s.visitsTab2, s.libraryTab)
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(top = contentPadding.calculateTopPadding())) {
-            // Шапка: название вкладки и количество записей серым.
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Text(titles[pager.currentPage], style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 Text(
-                    when (tab) {
-                        0 -> s.notesTab2
-                        1 -> s.visitsTab2
-                        else -> s.libraryTab
-                    },
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    when (tab) {
+                    when (pager.currentPage) {
                         0 -> s.notesCount(notes.size)
-                        1 -> visits.size.toString()
-                        else -> library.size.toString()
+                        1 -> s.visitsCount(visits.size)
+                        else -> s.libraryCount(library.size)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TabRow(selectedTabIndex = tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text(s.notesTab2) })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text(s.visitsTab2) })
-                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text(s.libraryTab) })
+            TabRow(selectedTabIndex = pager.currentPage) {
+                titles.forEachIndexed { i, t ->
+                    Tab(
+                        selected = pager.currentPage == i,
+                        onClick = { scope.launch { pager.animateScrollToPage(i) } },
+                        text = { Text(t, maxLines = 1, softWrap = false) },
+                    )
+                }
             }
-            when (tab) {
-                0 -> NotesList(notes, onOpenNote, onDeleteNote, contentPadding)
-                1 -> VisitsList(visits, onEditVisit, onDeleteVisit, contentPadding)
-                else -> LibraryList(library, onEditLibrary, onDeleteLibrary, contentPadding)
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                when (page) {
+                    0 -> NotesList(notes, onOpenNote, onDeleteNote, contentPadding)
+                    1 -> VisitsList(visits, onEditVisit, onDeleteVisit, contentPadding)
+                    else -> LibraryList(library, onEditLibrary, onDeleteLibrary, contentPadding)
+                }
             }
         }
-
         ExtendedFloatingActionButton(
             onClick = {
-                when (tab) {
+                when (pager.currentPage) {
                     0 -> onAddNote()
                     1 -> onAddVisit()
                     else -> onAddLibrary()
                 }
             },
             icon = { Icon(Icons.Default.Add, contentDescription = null) },
-            text = {
-                Text(
-                    when (tab) {
-                        0 -> s.noteFab
-                        1 -> s.visitFab
-                        else -> s.libraryFab
-                    },
-                )
-            },
+            text = { Text(listOf(s.noteFab, s.visitFab, s.libraryFab)[pager.currentPage]) },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
@@ -197,8 +193,54 @@ fun NotesScreen(
     }
 }
 
+/** Заголовок группы по давности записи. */
+fun ageGroup(atMillis: Long, s: S): String {
+    val days = today() - epochDayOf(atMillis)
+    return when {
+        days <= 0 -> s.groupToday
+        days == 1L -> s.groupYesterday
+        days <= 7 -> s.groupWeek
+        days <= 30 -> s.groupMonth
+        else -> s.groupOlder
+    }
+}
+/** Каталог лекарств — отдельный экран (открывается из настроек и из мастера таблетки). */
 @Composable
-private fun EmptyTabHint(title: String, body: String) {
+fun LibraryScreen(
+    library: List<MedLibraryEntry>,
+    onEdit: (Long) -> Unit,
+    onAdd: () -> Unit,
+    onDelete: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
+    val s = Lang.s
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(s.libraryTab + "  ·  " + library.size) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = onAdd,
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text(s.libraryFab) },
+            )
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            LibraryList(library, onEdit, onDelete, PaddingValues(0.dp))
+        }
+    }
+}
+
+@Composable
+fun EmptyTabHint(title: String, body: String) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -244,7 +286,17 @@ private fun NotesList(
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(notes, key = { it.id }) { note ->
+        val grouped = notes.groupBy { ageGroup(it.atMillis, Lang.s) }
+        grouped.forEach { (group, list) ->
+            item(key = "g-" + group) {
+                Text(
+                    group,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+                )
+            }
+            items(list, key = { it.id }) { note ->
             Card(
                 Modifier
                     .fillMaxWidth()
@@ -279,11 +331,12 @@ private fun NotesList(
                 }
             }
         }
+        }
     }
 }
 
 @Composable
-private fun VisitsList(
+fun VisitsList(
     visits: List<DoctorVisit>,
     onEdit: (Long) -> Unit,
     onDelete: (Long) -> Unit,
@@ -392,7 +445,7 @@ private fun VisitCard(
 }
 
 @Composable
-private fun LibraryList(
+fun LibraryList(
     entries: List<MedLibraryEntry>,
     onEdit: (Long) -> Unit,
     onDelete: (Long) -> Unit,
@@ -401,73 +454,57 @@ private fun LibraryList(
     val s = Lang.s
     var deleteTarget by remember { mutableStateOf<MedLibraryEntry?>(null) }
     deleteTarget?.let { entry ->
-        ConfirmDeleteDialog(
-            title = entry.name,
-            onConfirm = { onDelete(entry.id) },
-            onDismiss = { deleteTarget = null },
-        )
+        ConfirmDeleteDialog(title = entry.name, onConfirm = { onDelete(entry.id) }, onDismiss = { deleteTarget = null })
     }
-
     if (entries.isEmpty()) {
         EmptyTabHint(s.libraryEmptyTitle, s.libraryEmptyBody)
         return
     }
     LazyColumn(
         Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            top = 12.dp,
-            bottom = contentPadding.calculateBottomPadding() + 96.dp,
-        ),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = contentPadding.calculateBottomPadding() + 96.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(entries, key = { it.id }) { entry ->
             Card(
                 Modifier
                     .fillMaxWidth()
-                    .combinedClickable(
-                        onClick = { onEdit(entry.id) },
-                        onLongClick = { deleteTarget = entry },
-                    ),
+                    .combinedClickable(onClick = { onEdit(entry.id) }, onLongClick = { deleteTarget = entry }),
             ) {
-                Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        entry.photoUri?.let { uri ->
-                            UriImage(
-                                uri = uri,
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                        }
+                Column {
+                    // Фото — во всю ширину карточки, чтобы упаковку было видно без открытия.
+                    entry.photoUri?.let { uri ->
+                        UriImage(uri = uri, modifier = Modifier.fillMaxWidth().height(180.dp))
+                    }
+                    Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
                         Text(entry.name, fontWeight = FontWeight.SemiBold)
-                    }
-                    if (entry.period.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            entry.period,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    if (entry.effect.isNotBlank() || entry.feeling.isNotBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            listOf(entry.effect, entry.feeling)
-                                .filter { it.isNotBlank() }
-                                .joinToString(" · "),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        val period = libraryPeriodText(entry, s)
+                        if (period.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(period, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        }
+                        if (entry.effect.isNotBlank() || entry.feeling.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                listOf(entry.effect, entry.feeling).filter { it.isNotBlank() }.joinToString(" · "),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** «12.03.2026 — 20.05.2026» или «12.03.2026 — не указан». */
+fun libraryPeriodText(entry: MedLibraryEntry, s: S): String {
+    val start = entry.startEpochDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) } ?: return ""
+    val end = entry.endEpochDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) }
+    return if (end != null) "$start — $end" else "$start — " + s.libEndHint
 }
 
 // ---------- Просмотр заметки ----------
@@ -660,6 +697,7 @@ fun EditNoteScreen(
                 0 -> {
                     Text(s.noteNameQ, style = MaterialTheme.typography.headlineSmall)
                     OutlinedTextField(
+                        colors = fieldColors(),
                         value = title,
                         onValueChange = { title = it },
                         label = { Text(s.nameLabel) },
@@ -712,6 +750,7 @@ fun EditNoteScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedTextField(
+                        colors = fieldColors(),
                         value = description,
                         onValueChange = { description = it },
                         label = { Text(s.noteDescLabel) },
@@ -723,6 +762,7 @@ fun EditNoteScreen(
                 2 -> {
                     Text(s.noteBodyQ, style = MaterialTheme.typography.headlineSmall)
                     OutlinedTextField(
+                        colors = fieldColors(),
                         value = body,
                         onValueChange = { body = it },
                         label = { Text(s.noteBodyLabel) },
@@ -832,6 +872,7 @@ fun EditVisitScreen(
         ) {
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
+                colors = fieldColors(),
                 value = title,
                 onValueChange = { title = it },
                 label = { Text(s.visitTitleLabel) },
@@ -858,6 +899,7 @@ fun EditVisitScreen(
                 }
             }
             OutlinedTextField(
+                colors = fieldColors(),
                 value = comment,
                 onValueChange = { comment = it },
                 label = { Text(s.visitCommentLabel) },
@@ -882,7 +924,10 @@ fun EditLibraryScreen(
     val isNew = entryId == 0L
     var loaded by remember { mutableStateOf(isNew) }
     var name by remember { mutableStateOf("") }
-    var period by remember { mutableStateOf("") }
+    var startDay by remember { mutableStateOf<Long?>(null) }
+    var endDay by remember { mutableStateOf<Long?>(null) }
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
     var effect by remember { mutableStateOf("") }
     var feeling by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf<String?>(null) }
@@ -902,11 +947,28 @@ fun EditLibraryScreen(
         }
     }
 
+    if (showStartPicker) {
+        DateWheelDialog(
+            initial = startDay?.let { LocalDate.ofEpochDay(it) } ?: LocalDate.now(),
+            onPick = { startDay = it.toEpochDay() },
+            onDismiss = { showStartPicker = false },
+        )
+    }
+    if (showEndPicker) {
+        DateWheelDialog(
+            initial = endDay?.let { LocalDate.ofEpochDay(it) } ?: LocalDate.now(),
+            onPick = { endDay = it.toEpochDay() },
+            onDismiss = { showEndPicker = false },
+        )
+    }
+
     LaunchedEffect(entryId) {
         if (!isNew) {
-            vm.loadLibraryEntry(entryId)?.let { e ->
+            vm.loadLibraryEntry(entryId)
+?.let { e ->
                 name = e.name
-                period = e.period
+                startDay = e.startEpochDay
+                endDay = e.endEpochDay
                 effect = e.effect
                 feeling = e.feeling
                 photoUri = e.photoUri
@@ -946,7 +1008,8 @@ fun EditLibraryScreen(
                             MedLibraryEntry(
                                 id = entryId,
                                 name = name.trim(),
-                                period = period.trim(),
+                                startEpochDay = startDay,
+                                endEpochDay = endDay,
                                 effect = effect.trim(),
                                 feeling = feeling.trim(),
                                 photoUri = photoUri,
@@ -972,21 +1035,29 @@ fun EditLibraryScreen(
         ) {
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
+                colors = fieldColors(),
                 value = name,
                 onValueChange = { name = it },
                 label = { Text(s.libNameLabel) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            // Период приёма — две даты через календарь; конец необязателен.
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = { showStartPicker = true }, modifier = Modifier.weight(1f).height(52.dp)) {
+                    Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(startDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) } ?: s.libStartLabel)
+                }
+                OutlinedButton(onClick = { showEndPicker = true }, modifier = Modifier.weight(1f).height(52.dp)) {
+                    Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(endDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) } ?: s.libEndLabel)
+                }
+            }
+            Text(s.libEndLabel + ": " + s.libEndHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(
-                value = period,
-                onValueChange = { period = it },
-                label = { Text(s.libPeriodLabel) },
-                placeholder = { Text(s.libPeriodPlaceholder) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
+                colors = fieldColors(),
                 value = effect,
                 onValueChange = { effect = it },
                 label = { Text(s.libEffectLabel) },
@@ -994,6 +1065,7 @@ fun EditLibraryScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
+                colors = fieldColors(),
                 value = feeling,
                 onValueChange = { feeling = it },
                 label = { Text(s.libFeelingLabel) },
@@ -1001,6 +1073,7 @@ fun EditLibraryScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            Text(s.photoWhyHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             photoUri?.let { uri ->
                 UriImage(
                     uri = uri,

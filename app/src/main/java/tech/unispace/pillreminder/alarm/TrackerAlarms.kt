@@ -11,10 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.container
 import tech.unispace.pillreminder.data.AppDatabase
-import tech.unispace.pillreminder.data.Tracker
 import tech.unispace.pillreminder.data.TrackerType
-import tech.unispace.pillreminder.data.epochDayOf
-import tech.unispace.pillreminder.data.today
+import tech.unispace.pillreminder.data.askTimesList
 import tech.unispace.pillreminder.ui.Lang
 import java.time.LocalDate
 import java.time.LocalTime
@@ -26,26 +24,22 @@ fun trackerDisplayName(type: String): String = when (type) {
     else -> Lang.s.trackerSleep
 }
 
-/** Напоминания трекеров: «пора записать вес/настроение/сон» в назначенное время. */
+/** Максимум времён опроса в день — ограничивает диапазон requestCode. */
+const val MAX_ASK_TIMES = 8
+
+/** Напоминания трекеров: «пора записать вес/настроение/сон» — N раз в день в заданные часы. */
 object TrackerAlarms {
 
-    private fun intentFor(context: Context, trackerId: Long): PendingIntent =
+    private fun intentFor(context: Context, trackerId: Long, slot: Int): PendingIntent =
         PendingIntent.getBroadcast(
             context,
-            (820_000 + trackerId).toInt(),
+            (820_000 + trackerId * MAX_ASK_TIMES + slot).toInt(),
             Intent(context, TrackerReceiver::class.java)
-                .setData(Uri.parse("pill://tracker/" + trackerId))
-                .putExtra(TrackerReceiver.EXTRA_TRACKER_ID, trackerId),
+                .setData(Uri.parse("pill://tracker/" + trackerId + "/" + slot))
+                .putExtra(TrackerReceiver.EXTRA_TRACKER_ID, trackerId)
+                .putExtra(TrackerReceiver.EXTRA_SLOT, slot),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-
-    /** Ближайший день по периодичности «раз в N дней» от дня создания. */
-    private fun nextDueDay(tracker: Tracker, fromDay: Long): Long {
-        val n = tracker.everyNDays.coerceAtLeast(1).toLong()
-        val since = fromDay - tracker.startEpochDay
-        val rem = ((since % n) + n) % n
-        return if (rem == 0L) fromDay else fromDay + (n - rem)
-    }
 
     suspend fun reschedule(context: Context, db: AppDatabase) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
@@ -53,24 +47,23 @@ object TrackerAlarms {
         val zone = ZoneId.systemDefault()
 
         for (tracker in db.trackerDao().getAll()) {
-            val pi = intentFor(context, tracker.id)
-            alarmManager.cancel(pi)
+            val times = tracker.askTimesList().take(MAX_ASK_TIMES)
+            // Снимаем все слоты, включая те, что были в прошлой конфигурации.
+            for (slot in 0 until MAX_ASK_TIMES) alarmManager.cancel(intentFor(context, tracker.id, slot))
             if (!tracker.remindEnabled) continue
 
-            val time = LocalTime.of(tracker.askAtMinutes / 60, tracker.askAtMinutes % 60)
-            var day = nextDueDay(tracker, today())
-            var at = LocalDate.ofEpochDay(day).atTime(time).atZone(zone).toInstant().toEpochMilli()
-            // Сегодняшнее время уже прошло или запись уже есть — переносим на следующий цикл.
-            val doneToday = db.trackerDao().lastEntry(tracker.id)
-                ?.let { epochDayOf(it.atMillis) == today() } == true
-            if (at <= now || (day == today() && doneToday)) {
-                day = nextDueDay(tracker, day + 1)
-                at = LocalDate.ofEpochDay(day).atTime(time).atZone(zone).toInstant().toEpochMilli()
-            }
-            try {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-            } catch (_: SecurityException) {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            times.forEachIndexed { slot, minutes ->
+                val time = LocalTime.of(minutes / 60, minutes % 60)
+                var at = LocalDate.now().atTime(time).atZone(zone).toInstant().toEpochMilli()
+                if (at <= now) {
+                    at = LocalDate.now().plusDays(1).atTime(time).atZone(zone).toInstant().toEpochMilli()
+                }
+                val pi = intentFor(context, tracker.id, slot)
+                try {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+                } catch (_: SecurityException) {
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+                }
             }
         }
     }
@@ -80,6 +73,7 @@ class TrackerReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val trackerId = intent.getLongExtra(EXTRA_TRACKER_ID, -1L)
+        val slot = intent.getIntExtra(EXTRA_SLOT, 0)
         if (trackerId < 0) return
         val pending = goAsync()
         val app = context.applicationContext
@@ -87,9 +81,18 @@ class TrackerReceiver : BroadcastReceiver() {
             try {
                 val db = app.container.db
                 val tracker = db.trackerDao().getById(trackerId) ?: return@launch
-                val doneToday = db.trackerDao().lastEntry(trackerId)
-                    ?.let { epochDayOf(it.atMillis) == today() } == true
-                if (!doneToday) {
+                val times = tracker.askTimesList()
+                // Напоминаем, если после предыдущего слота (или с полуночи) записи не было.
+                val zone = ZoneId.systemDefault()
+                val prevMinutes = times.getOrNull(slot - 1)
+                val since = if (prevMinutes == null) {
+                    LocalDate.now().atStartOfDay(zone).toInstant().toEpochMilli()
+                } else {
+                    LocalDate.now().atTime(LocalTime.of(prevMinutes / 60, prevMinutes % 60))
+                        .atZone(zone).toInstant().toEpochMilli()
+                }
+                val last = db.trackerDao().lastEntry(trackerId)
+                if (last == null || last.atMillis < since) {
                     Notifications.showTracker(
                         app,
                         trackerId,
@@ -106,5 +109,6 @@ class TrackerReceiver : BroadcastReceiver() {
 
     companion object {
         const val EXTRA_TRACKER_ID = "trackerId"
+        const val EXTRA_SLOT = "slot"
     }
 }

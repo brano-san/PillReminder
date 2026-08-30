@@ -274,7 +274,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onDone(ok)
     }
 
-    suspend fun buildReport(days: Int): String = Report.build(db, days, Lang.s)
+    suspend fun buildReport(days: Int, sections: Set<String>): String = Report.build(db, days, Lang.s, sections)
 
     // ---------- Действия ----------
 

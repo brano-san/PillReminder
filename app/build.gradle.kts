@@ -22,7 +22,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.9"
+        versionName = "1.0"
     }
 
     signingConfigs {
@@ -58,6 +58,14 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+    // Имя файла: DoseDay-<версия>-<тип>.apk вместо безликого app-release.apk.
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "DoseDay-${variant.versionName}-${variant.buildType.name}.apk"
+        }
     }
 }
 

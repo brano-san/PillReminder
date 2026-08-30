@@ -6,9 +6,10 @@
 package tech.unispace.pillreminder.ui
 
 import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -18,11 +19,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -33,23 +40,30 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.data.DoseStatus
+import tech.unispace.pillreminder.data.Report
 import tech.unispace.pillreminder.data.TrackerType
 import tech.unispace.pillreminder.data.epochDayOf
 import tech.unispace.pillreminder.data.today
@@ -103,20 +117,15 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val say: (String) -> Unit = { msg -> scope.launch { snackbars.showSnackbar(msg) } }
-
-    // Что выгружаем — определяется тем, какой кнопкой открыли системный диалог сохранения.
+    var confirmRestore by remember { mutableStateOf(false) }
     var pendingContent by remember { mutableStateOf<suspend () -> String>({ "" }) }
 
-    val saveLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/octet-stream"),
-    ) { uri ->
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if (uri != null) {
             scope.launch {
                 try {
                     val text = pendingContent()
-                    context.contentResolver.openOutputStream(uri)?.use {
-                        it.write(text.toByteArray(Charsets.UTF_8))
-                    }
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
                     say(s.exportDone)
                 } catch (_: Exception) {
                     say(s.importError)
@@ -124,26 +133,35 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
             }
         }
     }
-
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             scope.launch {
                 val text = try {
-                    context.contentResolver.openInputStream(uri)?.use {
-                        it.readBytes().toString(Charsets.UTF_8)
-                    }
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
                 } catch (_: Exception) {
                     null
                 }
-                if (text == null) {
-                    say(s.importError)
-                } else {
-                    vm.importBackup(text) { ok -> say(if (ok) s.importDone else s.importError) }
-                }
+                if (text == null) say(s.importError)
+                else vm.importBackup(text) { ok -> say(if (ok) s.importDone else s.importError) }
             }
         }
+    }
+
+    if (confirmRestore) {
+        AlertDialog(
+            onDismissRequest = { confirmRestore = false },
+            title = { Text(s.restoreConfirmTitle) },
+            text = { Text(s.restoreConfirmBody) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRestore = false
+                        importLauncher.launch(arrayOf("application/json", "application/octet-stream", "text/*", "*/*"))
+                    },
+                ) { Text(s.importJson, color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmRestore = false }) { Text(s.cancel) } },
+        )
     }
 
     val stamp = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT))
@@ -153,11 +171,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
             Column(Modifier.padding(16.dp)) {
                 Text(s.exportJson, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    s.exportJsonBody,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(s.exportJsonBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(10.dp))
                 FilledTonalButton(
                     onClick = {
@@ -165,12 +179,9 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                         saveLauncher.launch("pills-backup-$stamp.json")
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(s.exportBtn)
-                }
+                ) { Text(s.exportBtn) }
             }
         }
-
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text(s.exportCsvDoses, fontWeight = FontWeight.SemiBold)
@@ -181,9 +192,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                         saveLauncher.launch("pills-doses-$stamp.csv")
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(s.exportBtn)
-                }
+                ) { Text(s.exportBtn) }
                 Spacer(Modifier.height(12.dp))
                 Text(s.exportCsvTrackers, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
@@ -193,28 +202,16 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                         saveLauncher.launch("pills-trackers-$stamp.csv")
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(s.exportBtn)
-                }
+                ) { Text(s.exportBtn) }
             }
         }
-
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text(s.importJson, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    s.importBody,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Text(s.importBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = { importLauncher.launch(arrayOf("application/json", "application/octet-stream", "text/*", "*/*")) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(s.importJson)
-                }
+                OutlinedButton(onClick = { confirmRestore = true }, modifier = Modifier.fillMaxWidth()) { Text(s.importJson) }
             }
         }
     }
@@ -230,21 +227,16 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     var days by remember { mutableIntStateOf(30) }
+    var sections by remember { mutableStateOf(Report.ALL_SECTIONS) }
     var report by remember { mutableStateOf("") }
 
-    LaunchedEffect(days) {
-        report = vm.buildReport(days)
-    }
+    LaunchedEffect(days, sections) { report = vm.buildReport(days, sections) }
 
-    val saveLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("text/plain"),
-    ) { uri ->
+    val saveTxt = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) {
             scope.launch {
                 try {
-                    context.contentResolver.openOutputStream(uri)?.use {
-                        it.write(report.toByteArray(Charsets.UTF_8))
-                    }
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(report.toByteArray(Charsets.UTF_8)) }
                     snackbars.showSnackbar(s.exportDone)
                 } catch (_: Exception) {
                     snackbars.showSnackbar(s.importError)
@@ -252,55 +244,78 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
             }
         }
     }
+    val savePdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val bytes = Report.toPdf(report)
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    snackbars.showSnackbar(s.exportDone)
+                } catch (_: Exception) {
+                    snackbars.showSnackbar(s.importError)
+                }
+            }
+        }
+    }
+    val stamp = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT))
 
     ToolScreen(s.reportTitle, onBack, snackbars) {
         Text(s.periodLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(7, 30, 90).forEach { n ->
-                FilterChip(
-                    selected = days == n,
-                    onClick = { days = n },
-                    label = { Text(s.periodDays(n)) },
-                )
-            }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            FilledTonalButton(
-                onClick = {
-                    val send = Intent(Intent.ACTION_SEND)
-                        .setType("text/plain")
-                        .putExtra(Intent.EXTRA_TEXT, report)
-                    context.startActivity(Intent.createChooser(send, s.reportShare))
-                },
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(s.reportShare)
-            }
-            OutlinedButton(
-                onClick = {
-                    val stamp = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT))
-                    saveLauncher.launch("pills-report-$stamp.txt")
-                },
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(s.reportSave)
+                FilterChip(selected = days == n, onClick = { days = n }, label = { Text(s.periodDays(n)) })
             }
         }
 
         Card(Modifier.fillMaxWidth()) {
-            Text(
-                report,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(16.dp),
-            )
+            Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Text(
+                    s.reportSections,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 8.dp, top = 6.dp),
+                )
+                listOf(
+                    Report.SEC_INTAKES to s.repIntakes,
+                    Report.SEC_MEDS to s.repMeds,
+                    Report.SEC_TRACKERS to s.repTrackers,
+                    Report.SEC_NOTES to s.repNotes,
+                    Report.SEC_VISITS to s.repVisits,
+                ).forEach { (key, label) ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { sections = if (key in sections) sections - key else sections + key },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = key in sections, onCheckedChange = { sections = if (it) sections + key else sections - key })
+                        Text(label)
+                    }
+                }
+            }
+        }
+
+        // Кнопки — переносом строки (FlowRow), чтобы длинные подписи не ломались по слогам.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(
+                onClick = {
+                    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report)
+                    context.startActivity(Intent.createChooser(send, s.reportShare))
+                },
+            ) { Text(s.reportShare, maxLines = 1, softWrap = false) }
+            OutlinedButton(onClick = { saveTxt.launch("pills-report-$stamp.txt") }) { Text("TXT", maxLines = 1, softWrap = false) }
+            OutlinedButton(onClick = { savePdf.launch("pills-report-$stamp.pdf") }) { Text("PDF", maxLines = 1, softWrap = false) }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Text(report, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp))
         }
     }
 }
 
-// ---------- Корреляции ----------
+// ---------- Корреляции: любые серии на одном графике ----------
 
-private enum class Series { WEIGHT, MOOD, SLEEP_QUALITY, SLEEP_HOURS, ADHERENCE }
+private enum class Series(val key: String) {
+    WEIGHT("weight"), MOOD("mood"), SLEEP_QUALITY("sleep_quality"), SLEEP_HOURS("sleep_hours"), ADHERENCE("adherence"),
+}
 
 private fun seriesLabel(series: Series, s: S): String = when (series) {
     Series.WEIGHT -> s.trackerWeight
@@ -310,101 +325,127 @@ private fun seriesLabel(series: Series, s: S): String = when (series) {
     Series.ADHERENCE -> s.seriesAdherence
 }
 
+private val SERIES_COLORS = listOf(
+    Color(0xFF2E7D6F), Color(0xFFFB8C00), Color(0xFF5C6BC0), Color(0xFFE53935), Color(0xFF8E24AA),
+)
+
+/** Несколько серий на одном холсте; каждая нормирована в 0..1 по своему диапазону, пропуски соединяются. */
+@Composable
+private fun MultiLineChart(series: List<Pair<List<Double?>, Color>>, xLabels: List<String>, modifier: Modifier) {
+    val gridColor = MaterialTheme.colorScheme.outlineVariant
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
+    Canvas(modifier) {
+        val padY = size.height * 0.08f
+        val usable = size.height - padY * 2 - X_LABELS_PAD
+        drawXLabels(xLabels, 0f, size.width, labelColor)
+        for (i in 0..3) {
+            val y = padY + usable * (1f - i / 3f)
+            drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.5f)
+        }
+        series.forEach { (values, color) ->
+            val present = values.filterNotNull()
+            if (present.size < 2 || values.size < 2) return@forEach
+            val min = present.min()
+            val max = present.max()
+            val span = (max - min).takeIf { it > 0.0 } ?: 1.0
+            val stepX = size.width / (values.size - 1)
+            val path = Path()
+            var started = false
+            values.forEachIndexed { i, v ->
+                if (v == null) return@forEachIndexed
+                val x = stepX * i
+                val y = padY + usable * (1f - ((v - min) / span).toFloat())
+                if (!started) {
+                    path.moveTo(x, y)
+                    started = true
+                } else {
+                    path.lineTo(x, y)
+                }
+            }
+            drawPath(path, color, style = Stroke(width = 5f))
+        }
+    }
+}
+
 @Composable
 fun CorrelationScreen(vm: MainViewModel, onBack: () -> Unit) {
     val s = Lang.s
     val snackbars = remember { SnackbarHostState() }
 
     var days by remember { mutableIntStateOf(30) }
-    var s1 by remember { mutableStateOf(Series.MOOD) }
-    var s2 by remember { mutableStateOf(Series.SLEEP_QUALITY) }
-    // Значения по дням окна: index -> value (или null, если данных нет).
-    var data1 by remember { mutableStateOf<List<Double?>>(emptyList()) }
-    var data2 by remember { mutableStateOf<List<Double?>>(emptyList()) }
+    var selected by remember { mutableStateOf(setOf(Series.MOOD, Series.SLEEP_QUALITY)) }
+    var data by remember { mutableStateOf<Map<Series, List<Double?>>>(emptyMap()) }
 
     val trackerRows by vm.trackerRows.collectAsState()
-    val journalUnused = trackerRows // подписка, чтобы пересчитывать при новых записях
 
-    LaunchedEffect(days, s1, s2, trackerRows) {
-        data1 = vm.seriesPerDay(seriesKey(s1), days)
-        data2 = vm.seriesPerDay(seriesKey(s2), days)
+    LaunchedEffect(days, selected, trackerRows) {
+        data = selected.associateWith { vm.seriesPerDay(it.key, days) }
     }
 
-    val color1 = MaterialTheme.colorScheme.primary
-    val color2 = Color(0xFFFB8C00)
+    val colorOf = Series.entries.withIndex().associate { (i, sr) -> sr to SERIES_COLORS[i % SERIES_COLORS.size] }
 
     ToolScreen(s.corrTitle, onBack, snackbars) {
+        // График сверху.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                MultiLineChart(
+                    series = selected.map { sr -> (data[sr] ?: emptyList()) to colorOf.getValue(sr) },
+                    xLabels = (0 until days).map { LocalDate.ofEpochDay(today() - days + 1 + it).format(DateTimeFormatter.ofPattern("d.MM")) },
+                    modifier = Modifier.fillMaxWidth().height(220.dp),
+                )
+                Spacer(Modifier.height(10.dp))
+                // Легенда.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    selected.forEach { sr ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.foundation.layout.Box(Modifier.size(10.dp).background(colorOf.getValue(sr), CircleShape))
+                            Spacer(Modifier.width(6.dp))
+                            Text(seriesLabel(sr, s), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+                // Парные корреляции по всем выбранным сериям.
+                val pairs = selected.toList()
+                val lines = buildList {
+                    for (i in pairs.indices) for (j in i + 1 until pairs.size) {
+                        val r = pearson(data[pairs[i]] ?: emptyList(), data[pairs[j]] ?: emptyList())
+                        add(
+                            seriesLabel(pairs[i], s) + " × " + seriesLabel(pairs[j], s) + ": " +
+                                (r?.let { String.format(Locale.ROOT, "r = %.2f", it) } ?: s.corrNotEnough),
+                        )
+                    }
+                }
+                if (lines.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold) }
+                }
+            }
+        }
+
+        // Управление снизу.
         Text(s.periodLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(14, 30, 90).forEach { n ->
                 FilterChip(selected = days == n, onClick = { days = n }, label = { Text(s.periodDays(n)) })
             }
         }
-
-        Text(s.corrSeries1, style = MaterialTheme.typography.titleSmall, color = color1)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Series.entries.forEach { series ->
-                FilterChip(
-                    selected = s1 == series,
-                    onClick = { s1 = series },
-                    label = { Text(seriesLabel(series, s)) },
-                )
-            }
-        }
-        Text(s.corrSeries2, style = MaterialTheme.typography.titleSmall, color = color2)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Series.entries.forEach { series ->
-                FilterChip(
-                    selected = s2 == series,
-                    onClick = { s2 = series },
-                    label = { Text(seriesLabel(series, s)) },
-                )
-            }
-        }
-
+        Text(s.corrPick, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
         Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                val v1 = data1.filterNotNull()
-                val v2 = data2.filterNotNull()
-                if (v1.size < 2 || v2.size < 2) {
-                    Text(
-                        s.notEnoughData,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    // Обе серии нормируются в 0..1 каждая по своему диапазону.
-                    LineChart(
-                        values = v1,
-                        modifier = Modifier.fillMaxWidth().height(180.dp),
-                        color = color1,
-                        showPoints = false,
-                    )
-                    LineChart(
-                        values = v2,
-                        modifier = Modifier.fillMaxWidth().height(180.dp),
-                        color = color2,
-                        showPoints = false,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    val r = pearson(data1, data2)
-                    Text(
-                        if (r == null) s.corrNotEnough
-                        else s.corrCoef(String.format(Locale.ROOT, "%.2f", r)),
-                        fontWeight = FontWeight.SemiBold,
-                    )
+            Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                Series.entries.forEach { sr ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { selected = if (sr in selected) selected - sr else selected + sr },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = sr in selected, onCheckedChange = { selected = if (it) selected + sr else selected - sr })
+                        androidx.compose.foundation.layout.Box(Modifier.size(10.dp).background(colorOf.getValue(sr), CircleShape))
+                        Spacer(Modifier.width(8.dp))
+                        Text(seriesLabel(sr, s))
+                    }
                 }
             }
         }
     }
-}
-
-private fun seriesKey(series: Series): String = when (series) {
-    Series.WEIGHT -> "weight"
-    Series.MOOD -> "mood"
-    Series.SLEEP_QUALITY -> "sleep_quality"
-    Series.SLEEP_HOURS -> "sleep_hours"
-    Series.ADHERENCE -> "adherence"
 }
 
 /** Пирсон по дням, где есть обе серии. */
@@ -434,12 +475,10 @@ suspend fun MainViewModel.seriesPerDay(key: String, days: Int): List<Double?> {
 
     return when (key) {
         "adherence" -> {
-            val doses = db.doseDao().getAll().filter { it.dayEpochDay in fromDay..toDay }
-                .groupBy { it.dayEpochDay }
+            val doses = db.doseDao().getAll().filter { it.dayEpochDay in fromDay..toDay }.groupBy { it.dayEpochDay }
             (fromDay..toDay).map { day ->
                 val list = doses[day] ?: return@map null
-                if (list.isEmpty()) null
-                else list.count { it.status == DoseStatus.TAKEN } * 100.0 / list.size
+                if (list.isEmpty()) null else list.count { it.status == DoseStatus.TAKEN } * 100.0 / list.size
             }
         }
         else -> {
@@ -448,24 +487,16 @@ suspend fun MainViewModel.seriesPerDay(key: String, days: Int): List<Double?> {
                 "mood" -> TrackerType.MOOD
                 else -> TrackerType.SLEEP
             }
-            val tracker = db.trackerDao().getAll().firstOrNull { it.type == type }
-                ?: return List(days) { null }
+            val tracker = db.trackerDao().getAll().firstOrNull { it.type == type } ?: return List(days) { null }
             val entries = db.trackerDao().getAllEntries()
                 .filter { it.trackerId == tracker.id && epochDayOf(it.atMillis) in fromDay..toDay }
                 .groupBy { epochDayOf(it.atMillis) }
             (fromDay..toDay).map { day ->
                 val list = entries[day] ?: return@map null
                 when (key) {
-                    "sleep_hours" -> {
-                        val durations = list.mapNotNull { e ->
-                            if (e.sleepStart != null && e.sleepEnd != null) {
-                                (e.sleepEnd - e.sleepStart) / 3_600_000.0
-                            } else {
-                                null
-                            }
-                        }
-                        durations.averageOrNull()
-                    }
+                    "sleep_hours" -> list.mapNotNull { e ->
+                        if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
+                    }.averageOrNull()
                     else -> list.map { it.value }.averageOrNull()
                 }
             }

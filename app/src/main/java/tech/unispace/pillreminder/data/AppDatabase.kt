@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
 
 class Converters {
     @TypeConverter
@@ -45,16 +46,18 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var instance: AppDatabase? = null
 
+        /** Миграции между версиями схемы; для 1 → 2 добавить `object : Migration(1, 2) { ... }`. */
+        val MIGRATIONS: Array<Migration> = emptyArray()
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "pills.db",
             )
-                // До первого релиза схема нестабильна: при любом несовпадении версия/схема
-                // база пересоздаётся с нуля. После релиза заменить на явные миграции.
-                .fallbackToDestructiveMigration()
-                .fallbackToDestructiveMigrationOnDowngrade()
+                // Релиз 1.0: схема зафиксирована. Любое изменение сущностей = version++ и явная
+                // Migration в MIGRATIONS, иначе Room упадёт при старте (данные пользователя терять нельзя).
+                .addMigrations(*MIGRATIONS)
                 .build()
                 .also { instance = it }
         }

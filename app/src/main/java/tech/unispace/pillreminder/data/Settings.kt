@@ -62,9 +62,12 @@ class Settings(context: Context) {
         get() = prefs.getStringSet(KEY_VISIT_OFFSETS, null)
             ?.mapNotNull { it.toIntOrNull() }?.toSet()
             ?: setOf(2880, 1440, 180)
-        set(value) = prefs.edit()
-            .putStringSet(KEY_VISIT_OFFSETS, value.map { it.toString() }.toSet())
-            .apply()
+        set(value) {
+            prefs.edit()
+                .putStringSet(KEY_VISIT_OFFSETS, value.map { it.toString() }.toSet())
+                .apply()
+            visitOffsetsEver = visitOffsetsEver + value
+        }
 
     /** Не показывать названия таблеток в уведомлениях. */
     var privateNotifications: Boolean
@@ -111,7 +114,31 @@ class Settings(context: Context) {
         get() = prefs.getInt(KEY_QUIET_TO, 8 * 60)
         set(value) = prefs.edit().putInt(KEY_QUIET_TO, value.coerceIn(0, 24 * 60 - 1)).apply()
 
+    /** Туториал уже показан при первом запуске. */
+    var tutorialSeen: Boolean
+        get() = prefs.getBoolean(KEY_TUTORIAL_SEEN, false)
+        set(value) = prefs.edit().putBoolean(KEY_TUTORIAL_SEEN, value).apply()
+
+    /**
+     * Все смещения напоминаний о визитах, которые когда-либо включались — чтобы при
+     * пересборке будильников отменить и те, что пользователь потом убрал.
+     */
+    var visitOffsetsEver: Set<Int>
+        get() = prefs.getStringSet(KEY_VISIT_OFFSETS_EVER, null)
+            ?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
+        set(value) = prefs.edit()
+            .putStringSet(KEY_VISIT_OFFSETS_EVER, value.map { it.toString() }.toSet())
+            .apply()
+
+    /** Компактные карточки таблеток на главном экране. */
+    var homeCompact: Boolean
+        get() = prefs.getBoolean(KEY_HOME_COMPACT, false)
+        set(value) = prefs.edit().putBoolean(KEY_HOME_COMPACT, value).apply()
+
     private companion object {
+        const val KEY_HOME_COMPACT = "home_compact"
+        const val KEY_TUTORIAL_SEEN = "tutorial_seen"
+        const val KEY_VISIT_OFFSETS_EVER = "visit_offsets_ever"
         const val KEY_SNOOZE = "snooze_minutes"
         const val KEY_QUIET_ENABLED = "quiet_enabled"
         const val KEY_QUIET_FROM = "quiet_from"

@@ -1,7 +1,12 @@
 package tech.unispace.pillreminder.data
 
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
+import android.text.StaticLayout
+import android.text.TextPaint
 import tech.unispace.pillreminder.ui.S
 import tech.unispace.pillreminder.ui.formatClock
+import java.io.ByteArrayOutputStream
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -9,111 +14,180 @@ import java.util.Locale
 /** Текстовый отчёт за период — сводка для приёма у врача. */
 object Report {
 
-    suspend fun build(db: AppDatabase, days: Int, s: S): String {
+    const val SEC_INTAKES = "intakes"
+    const val SEC_MEDS = "meds"
+    const val SEC_TRACKERS = "trackers"
+    const val SEC_NOTES = "notes"
+    const val SEC_VISITS = "visits"
+    val ALL_SECTIONS = setOf(SEC_INTAKES, SEC_MEDS, SEC_TRACKERS, SEC_NOTES, SEC_VISITS)
+
+    private fun header(sb: StringBuilder, title: String) {
+        sb.appendLine()
+        sb.appendLine(title.uppercase())
+        sb.appendLine("─".repeat(title.length.coerceAtLeast(12)))
+    }
+
+    suspend fun build(db: AppDatabase, days: Int, s: S, sections: Set<String> = ALL_SECTIONS): String {
         val toDay = today()
         val fromDay = toDay - days + 1
-        val fromMillis = LocalDate.ofEpochDay(fromDay)
-            .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val zone = java.time.ZoneId.systemDefault()
+        val fromMillis = LocalDate.ofEpochDay(fromDay).atStartOfDay(zone).toInstant().toEpochMilli()
         val dateFmt = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.ROOT)
 
         val doses = db.doseDao().getAll().filter { it.dayEpochDay in fromDay..toDay }
+        val meds = db.medicationDao().getAllIncludingInactive().associateBy { it.id }
         val planned = doses.size
         val taken = doses.count { it.status == DoseStatus.TAKEN }
         val skipped = doses.count { it.status == DoseStatus.SKIPPED }
 
         return buildString {
-            appendLine(s.reportTitle)
+            appendLine(s.reportTitle.uppercase())
             appendLine(
                 LocalDate.ofEpochDay(fromDay).format(dateFmt) + " — " +
-                    LocalDate.ofEpochDay(toDay).format(dateFmt),
+                    LocalDate.ofEpochDay(toDay).format(dateFmt) + " · " + s.periodDays(days),
             )
-            appendLine()
 
-            // Дисциплина
-            appendLine("== " + s.repAdherence + " ==")
-            if (planned == 0) {
-                appendLine(s.repNoData)
-            } else {
-                val pct = taken * 100 / planned
-                appendLine(
-                    "$pct% · $planned ${s.repPlanned}, $taken ${s.repTaken}, " +
-                        "$skipped ${s.repSkipped}",
-                )
-            }
-            appendLine()
-
-            // По лекарствам
-            appendLine("== " + s.repMeds + " ==")
-            val byName = doses.groupBy { it.medNameSnapshot.ifBlank { "?" } }
-            if (byName.isEmpty()) appendLine(s.repNoData)
-            byName.forEach { (name, list) ->
-                appendLine(
-                    "- $name: ${list.count { it.status == DoseStatus.TAKEN }} ${s.repTaken}, " +
-                        "${list.count { it.status == DoseStatus.SKIPPED }} ${s.repSkipped} " +
-                        "(${list.size} ${s.repPlanned})",
-                )
-            }
-            appendLine()
-
-            // Трекеры
-            val trackers = db.trackerDao().getAll()
-            val entries = db.trackerDao().getAllEntries().filter { it.atMillis >= fromMillis }
-            for (tracker in trackers) {
-                val mine = entries.filter { it.trackerId == tracker.id }
-                val title = when (tracker.type) {
-                    TrackerType.WEIGHT -> s.trackerWeight
-                    TrackerType.MOOD -> s.trackerMood
-                    else -> s.trackerSleep
-                }
-                appendLine("== $title ==")
-                if (mine.isEmpty()) {
+            if (SEC_INTAKES in sections) {
+                header(this, s.repAdherence)
+                if (planned == 0) {
                     appendLine(s.repNoData)
                 } else {
-                    val values = mine.map { it.value }
-                    appendLine(
-                        s.minLabel + " " + fmt(values.min()) + " · " +
-                            s.maxLabel + " " + fmt(values.max()) + " · " +
-                            s.avgLabel + " " + fmt(values.average()),
-                    )
-                    if (tracker.type == TrackerType.SLEEP) {
-                        val durations = mine.mapNotNull { e ->
-                            if (e.sleepStart != null && e.sleepEnd != null) {
-                                (e.sleepEnd - e.sleepStart) / 3_600_000.0
-                            } else {
-                                null
-                            }
+                    val pct = taken * 100 / planned
+                    appendLine("$pct%")
+                    appendLine("  $planned ${s.repPlanned} · $taken ${s.repTaken} · $skipped ${s.repSkipped}")
+                }
+            }
+
+            if (SEC_MEDS in sections) {
+                header(this, s.repMeds)
+                val byMed = doses.groupBy { it.medId }
+                if (byMed.isEmpty()) appendLine(s.repNoData)
+                byMed.forEach { (medId, list) ->
+                    val med = meds[medId]
+                    val name = med?.name ?: list.first().medNameSnapshot.ifBlank { "?" }
+                    appendLine("• $name")
+                    if (med != null) {
+                        val dose = listOf(med.form, med.doseInfo).filter { it.isNotBlank() }.joinToString(" ")
+                        val schedule = when {
+                            med.asNeeded -> s.asNeededShort
+                            else -> s.schedule(med.timesPerDay, med.intervalMinutes, med.everyNDays)
                         }
-                        if (durations.isNotEmpty()) {
-                            appendLine(s.seriesSleepHours + ": " + s.avgLabel + " " + fmt(durations.average()))
+                        appendLine("  $dose · ${s.perIntake(s.pills(med.dosesPerIntake, med.form))}")
+                        appendLine("  ${s.repSchedule}: $schedule")
+                    }
+                    val t = list.count { it.status == DoseStatus.TAKEN }
+                    val sk = list.count { it.status == DoseStatus.SKIPPED }
+                    val pct = if (list.isEmpty()) 0 else t * 100 / list.size
+                    appendLine("  $t ${s.repTaken} · $sk ${s.repSkipped} · ${list.size} ${s.repPlanned} · $pct%")
+                }
+            }
+
+            if (SEC_TRACKERS in sections) {
+                val trackers = db.trackerDao().getAll()
+                val entries = db.trackerDao().getAllEntries().filter { it.atMillis >= fromMillis }
+                for (tracker in trackers) {
+                    val mine = entries.filter { it.trackerId == tracker.id }
+                    val title = when (tracker.type) {
+                        TrackerType.WEIGHT -> s.trackerWeight
+                        TrackerType.MOOD -> s.trackerMood
+                        else -> s.trackerSleep
+                    }
+                    header(this, title)
+                    if (mine.isEmpty()) {
+                        appendLine(s.repNoData)
+                    } else {
+                        val values = mine.map { it.value }
+                        appendLine(
+                            "  ${s.minLabel} ${fmt(values.min())} · ${s.maxLabel} ${fmt(values.max())} · " +
+                                "${s.avgLabel} ${fmt(values.average())} · n=${values.size}",
+                        )
+                        if (tracker.type == TrackerType.SLEEP) {
+                            val durations = mine.mapNotNull { e ->
+                                if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
+                            }
+                            if (durations.isNotEmpty()) {
+                                appendLine("  ${s.seriesSleepHours}: ${s.avgLabel} ${fmt(durations.average())}")
+                            }
                         }
                     }
                 }
-                appendLine()
             }
 
-            // Заметки
-            appendLine("== " + s.repNotes + " ==")
-            val notes = db.noteDao().observeAllOnce().filter { it.atMillis >= fromMillis }
-            if (notes.isEmpty()) appendLine(s.repNoData)
-            notes.sortedBy { it.atMillis }.forEach { n ->
-                val date = java.time.Instant.ofEpochMilli(n.atMillis)
-                    .atZone(java.time.ZoneId.systemDefault()).toLocalDate().format(dateFmt)
-                appendLine("- [$date ${formatClock(n.atMillis)}] ${n.title}" +
-                    if (n.description.isNotBlank()) " — ${n.description}" else "")
+            if (SEC_NOTES in sections) {
+                header(this, s.repNotes)
+                val notes = db.noteDao().observeAllOnce().filter { it.atMillis >= fromMillis }
+                if (notes.isEmpty()) appendLine(s.repNoData)
+                notes.sortedBy { it.atMillis }.forEach { n ->
+                    val date = java.time.Instant.ofEpochMilli(n.atMillis).atZone(zone).toLocalDate().format(dateFmt)
+                    appendLine("• $date ${formatClock(n.atMillis)} — ${n.title}")
+                    if (n.description.isNotBlank()) appendLine("  ${n.description}")
+                }
             }
-            appendLine()
 
-            // Визиты
-            appendLine("== " + s.repVisits + " ==")
-            val visits = db.visitDao().getAll().filter { it.atMillis >= fromMillis }
-            if (visits.isEmpty()) appendLine(s.repNoData)
-            visits.sortedBy { it.atMillis }.forEach { v ->
-                val date = java.time.Instant.ofEpochMilli(v.atMillis)
-                    .atZone(java.time.ZoneId.systemDefault()).toLocalDate().format(dateFmt)
-                appendLine("- [$date ${formatClock(v.atMillis)}] ${v.title}" +
-                    if (v.comment.isNotBlank()) " — ${v.comment}" else "")
+            if (SEC_VISITS in sections) {
+                header(this, s.repVisits)
+                val visits = db.visitDao().getAll().filter { it.atMillis >= fromMillis }
+                if (visits.isEmpty()) appendLine(s.repNoData)
+                visits.sortedBy { it.atMillis }.forEach { v ->
+                    val date = java.time.Instant.ofEpochMilli(v.atMillis).atZone(zone).toLocalDate().format(dateFmt)
+                    appendLine("• $date ${formatClock(v.atMillis)} — ${v.title}")
+                    if (v.comment.isNotBlank()) appendLine("  ${v.comment}")
+                }
             }
         }
+    }
+
+    /** Тот же текст в PDF: А4, переносы строк, разбивка на страницы, заголовки жирным. */
+    fun toPdf(text: String): ByteArray {
+        val pageWidth = 595
+        val pageHeight = 842
+        val margin = 40
+        val contentWidth = pageWidth - margin * 2
+        val bodyPaint = TextPaint().apply { isAntiAlias = true; textSize = 11f; color = android.graphics.Color.BLACK }
+        val headPaint = TextPaint(bodyPaint).apply { textSize = 13f; isFakeBoldText = true }
+
+        // Строки, набранные ЗАГЛАВНЫМИ (заголовки разделов), выводим жирным.
+        data class Block(val layout: StaticLayout)
+        val blocks = text.lines().map { line ->
+            val isHeader = line.isNotBlank() && line == line.uppercase() && line.any { it.isLetter() }
+            val paint = if (isHeader) headPaint else bodyPaint
+            Block(StaticLayout.Builder.obtain(line.ifBlank { " " }, 0, line.ifBlank { " " }.length, paint, contentWidth).build())
+        }
+
+        val document = PdfDocument()
+        var page: PdfDocument.Page? = null
+        var y = 0
+        var pageIndex = 0
+        fun newPage() {
+            page?.let { p ->
+                val footer = Paint().apply { textSize = 9f; color = android.graphics.Color.GRAY }
+                p.canvas.drawText(pageIndex.toString(), pageWidth / 2f, pageHeight - 20f, footer)
+                document.finishPage(p)
+            }
+            pageIndex++
+            page = document.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageIndex).create())
+            y = margin
+        }
+        newPage()
+        for (b in blocks) {
+            if (y + b.layout.height > pageHeight - margin) newPage()
+            val canvas = page!!.canvas
+            canvas.save()
+            canvas.translate(margin.toFloat(), y.toFloat())
+            b.layout.draw(canvas)
+            canvas.restore()
+            y += b.layout.height + 2
+        }
+        page?.let { p ->
+            val footer = Paint().apply { textSize = 9f; color = android.graphics.Color.GRAY }
+            p.canvas.drawText(pageIndex.toString(), pageWidth / 2f, pageHeight - 20f, footer)
+            document.finishPage(p)
+        }
+
+        val out = ByteArrayOutputStream()
+        document.writeTo(out)
+        document.close()
+        return out.toByteArray()
     }
 
     private fun fmt(v: Double): String =

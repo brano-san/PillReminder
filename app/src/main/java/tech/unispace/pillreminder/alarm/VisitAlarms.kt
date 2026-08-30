@@ -18,18 +18,22 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** Все возможные смещения напоминаний о визите; какие включены — решает настройка. */
-val VISIT_OFFSET_CHOICES = listOf(2880, 1440, 180)
+/** Пресеты смещений напоминаний о визите, в минутах; пользователь может добавить свои. */
+val VISIT_OFFSET_PRESETS = listOf(10080, 4320, 2880, 1440, 720, 180, 60)
 
-/** Будильники на визиты к врачу: за 2 дня / 1 день / 3 часа — что выбрано в настройках. */
+/** Будильники на визиты к врачу: за N часов/дней — что выбрано в настройках. */
 object VisitAlarms {
 
-    private fun intentFor(context: Context, visitId: Long, offsetIndex: Int): PendingIntent =
+    /**
+     * requestCode — детерминированный хэш пары (визит, смещение): смещения теперь
+     * произвольные, индексом их не пронумеровать.
+     */
+    private fun intentFor(context: Context, visitId: Long, offsetMinutes: Int): PendingIntent =
         PendingIntent.getBroadcast(
             context,
-            (900_000 + visitId * VISIT_OFFSET_CHOICES.size + offsetIndex).toInt(),
+            ("visit-$visitId-$offsetMinutes").hashCode(),
             Intent(context, VisitReceiver::class.java)
-                .setData(Uri.parse("pill://visit/" + visitId + "/" + offsetIndex))
+                .setData(Uri.parse("pill://visit/" + visitId + "/" + offsetMinutes))
                 .putExtra(VisitReceiver.EXTRA_VISIT_ID, visitId),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -38,14 +42,17 @@ object VisitAlarms {
     suspend fun reschedule(context: Context, db: AppDatabase) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         val now = System.currentTimeMillis()
-        val enabled = Settings(context).visitOffsetsMinutes
+        val settings = Settings(context)
+        val enabled = settings.visitOffsetsMinutes
+        // Отменяем всё, что могло быть поставлено раньше, включая уже убранные смещения.
+        val toCancel = VISIT_OFFSET_PRESETS.toSet() + settings.visitOffsetsEver + enabled
 
         for (visit in db.visitDao().getAll()) {
-            VISIT_OFFSET_CHOICES.forEachIndexed { index, offsetMinutes ->
-                val pi = intentFor(context, visit.id, index)
-                alarmManager.cancel(pi)
-                val at = visit.atMillis - offsetMinutes * 60_000L
-                if (offsetMinutes in enabled && at > now) {
+            for (offset in toCancel) alarmManager.cancel(intentFor(context, visit.id, offset))
+            for (offset in enabled) {
+                val at = visit.atMillis - offset * 60_000L
+                if (at > now) {
+                    val pi = intentFor(context, visit.id, offset)
                     try {
                         alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
                     } catch (_: SecurityException) {
