@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!--
+        Капсула нарисована в координатах 24x24 с центром ровно в (12,12), затем группа
+        масштабируется вокруг того же центра и переносится в центр канвы 108x108.
+        Так фигура гарантированно стоит посередине маски адаптивной иконки.
+    -->
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="2.6"
+        android:scaleY="2.6"
+        android:rotation="-45"
+        android:translateX="42"
+        android:translateY="42">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M3,12a6,6 0 0 1 6,-6h3.25v12h-3.25a6,6 0 0 1 -6,-6z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M13.25,6h1.75a6,6 0 0 1 0,12h-1.75z" />
+    </group>
+</vector>

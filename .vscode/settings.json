@@ -1,0 +1,15 @@
+{
+  "java.home": "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.16.8-hotspot",
+  "kotlin.java.home": "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.16.8-hotspot",
+  "kotlin.compiler.jvm.target": "17",
+  "gradle.javaHome": "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.16.8-hotspot",
+  "gradle.nestedProjects": true,
+  "files.exclude": {
+    "**/.gradle": true,
+    "**/build": true
+  },
+  "terminal.integrated.env.windows": {
+    "JAVA_HOME": "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.16.8-hotspot",
+    "ANDROID_HOME": "C:\\Users\\brano\\Android\\Sdk"
+  }
+}

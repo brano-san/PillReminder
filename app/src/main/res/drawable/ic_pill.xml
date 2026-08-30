@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Иконка уведомления: силуэт капсулы, центр в (12,12). -->
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:rotation="-45"
+        android:scaleX="0.85"
+        android:scaleY="0.85">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M3,12a6,6 0 0 1 6,-6h3.25v12h-3.25a6,6 0 0 1 -6,-6z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M13.25,6h1.75a6,6 0 0 1 0,12h-1.75z" />
+    </group>
+</vector>
