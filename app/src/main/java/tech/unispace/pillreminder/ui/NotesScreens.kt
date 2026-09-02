@@ -35,6 +35,19 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import tech.unispace.pillreminder.data.Medication
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Card
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -61,6 +74,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -204,6 +218,34 @@ fun ageGroup(atMillis: Long, s: S): String {
         else -> s.groupOlder
     }
 }
+/** Строка поиска над списком: одинаковая для заметок и каталога. */
+@Composable
+fun SearchField(query: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onChange,
+        placeholder = { Text(Lang.s.searchHint) },
+        singleLine = true,
+        colors = fieldColors(),
+        trailingIcon = {
+            if (query.isNotBlank()) {
+                IconButton(onClick = { onChange("") }) { Icon(Icons.Default.Close, contentDescription = Lang.s.cancel) }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** Фильтр заметок по заголовку, описанию, тексту и тегам. */
+fun filterNotes(notes: List<Note>, query: String): List<Note> {
+    if (query.isBlank()) return notes
+    val q = query.trim().lowercase()
+    return notes.filter {
+        it.title.lowercase().contains(q) || it.description.lowercase().contains(q) ||
+            it.body.lowercase().contains(q) || it.tags.lowercase().contains(q)
+    }
+}
+
 /** Каталог лекарств — отдельный экран (открывается из настроек и из мастера таблетки). */
 @Composable
 fun LibraryScreen(
@@ -263,6 +305,9 @@ private fun NotesList(
     onDelete: (Long) -> Unit,
     contentPadding: PaddingValues,
 ) {
+    // Поиск по заголовку, тексту и тегам: листать три десятка заметок неудобно.
+    var query by rememberSaveable { mutableStateOf("") }
+    val notes = remember(notes, query) { filterNotes(notes, query) }
     var deleteTarget by remember { mutableStateOf<Note?>(null) }
     deleteTarget?.let { note ->
         ConfirmDeleteDialog(
@@ -272,7 +317,7 @@ private fun NotesList(
         )
     }
 
-    if (notes.isEmpty()) {
+    if (notes.isEmpty() && query.isBlank()) {
         EmptyTabHint(Lang.s.notesEmptyTitle, Lang.s.notesEmptyBody)
         return
     }
@@ -286,6 +331,7 @@ private fun NotesList(
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(key = "search") { SearchField(query) { query = it } }
         val grouped = notes.groupBy { ageGroup(it.atMillis, Lang.s) }
         grouped.forEach { (group, list) ->
             item(key = "g-" + group) {
@@ -318,6 +364,10 @@ private fun NotesList(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                    if (note.tags.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(note.tags, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
                     if (note.description.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
                         Text(
@@ -352,13 +402,19 @@ fun VisitsList(
         )
     }
 
+    // Мини-календарь: видно, в какие дни есть визиты, и можно отфильтровать список одним тапом.
+    var month by remember { mutableStateOf(LocalDate.now().withDayOfMonth(1)) }
+    var pickedDay by remember { mutableStateOf<Long?>(null) }
+    val visitDays = remember(visits) { visits.map { epochDayOf(it.atMillis) }.toSet() }
+
     if (visits.isEmpty()) {
         EmptyTabHint(s.visitsEmptyTitle, s.visitsEmptyBody)
         return
     }
     val now = System.currentTimeMillis()
-    val upcoming = visits.filter { it.atMillis >= now }.sortedBy { it.atMillis }
-    val past = visits.filter { it.atMillis < now }.sortedByDescending { it.atMillis }
+    val shown = pickedDay?.let { day -> visits.filter { epochDayOf(it.atMillis) == day } } ?: visits
+    val upcoming = shown.filter { it.atMillis >= now }.sortedBy { it.atMillis }
+    val past = shown.filter { it.atMillis < now }.sortedByDescending { it.atMillis }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -370,6 +426,26 @@ fun VisitsList(
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(key = "calendar") {
+            VisitsCalendar(
+                month = month,
+                visitDays = visitDays,
+                picked = pickedDay,
+                onMonth = { month = month.plusMonths(it) },
+                onPick = { day -> pickedDay = if (pickedDay == day) null else day },
+            )
+        }
+        if (upcoming.isEmpty() && past.isEmpty()) {
+            item(key = "empty-day") {
+                Text(
+                    s.noEntriesYet,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                )
+            }
+        }
         if (upcoming.isNotEmpty()) {
             item(key = "up") { SectionLabel(s.upcomingVisits) }
             items(upcoming, key = { it.id }) { visit ->
@@ -381,6 +457,84 @@ fun VisitsList(
             items(past, key = { it.id }) { visit ->
                 VisitCard(visit, past = true, onEdit = onEdit, onLong = { deleteTarget = it })
             }
+        }
+    }
+}
+
+/** Компактный месяц над списком визитов: точка под числом — в этот день есть визит. */
+@Composable
+private fun VisitsCalendar(
+    month: LocalDate,
+    visitDays: Set<Long>,
+    picked: Long?,
+    onMonth: (Long) -> Unit,
+    onPick: (Long) -> Unit,
+) {
+    val s = Lang.s
+    val daysInMonth = month.lengthOfMonth()
+    val firstCellOffset = month.dayOfWeek.value - 1
+    val today = LocalDate.now().toEpochDay()
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { onMonth(-1) }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = s.weekPrev)
+                }
+                Text(
+                    s.monthNames[month.monthValue - 1] + " " + month.year,
+                    style = MaterialTheme.typography.titleSmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { onMonth(1) }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = s.weekNext)
+                }
+            }
+            val rows = ((firstCellOffset + daysInMonth + 6) / 7)
+            for (row in 0 until rows) {
+                Row(Modifier.fillMaxWidth()) {
+                    for (col in 0 until 7) {
+                        val index = row * 7 + col - firstCellOffset
+                        if (index < 0 || index >= daysInMonth) {
+                            Spacer(Modifier.weight(1f))
+                            continue
+                        }
+                        val date = month.plusDays(index.toLong())
+                        val day = date.toEpochDay()
+                        val hasVisit = day in visitDays
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .padding(1.dp)
+                                .background(
+                                    if (picked == day) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                    RoundedCornerShape(6.dp),
+                                )
+                                .clickable(enabled = hasVisit) { onPick(day) }
+                                .padding(vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                date.dayOfMonth.toString(),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (day == today) FontWeight.Bold else FontWeight.Normal,
+                                color = if (hasVisit) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Box(
+                                Modifier
+                                    .padding(top = 2.dp)
+                                    .size(4.dp)
+                                    .background(
+                                        if (hasVisit) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        RoundedCornerShape(2.dp),
+                                    ),
+                            )
+                        }
+                    }
+                }
+            }
+            Text(s.visitsCalendarHint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -452,11 +606,22 @@ fun LibraryList(
     contentPadding: PaddingValues,
 ) {
     val s = Lang.s
+    var query by rememberSaveable { mutableStateOf("") }
+    val entries = remember(entries, query) {
+        if (query.isBlank()) {
+            entries
+        } else {
+            val q = query.trim().lowercase()
+            entries.filter {
+                it.name.lowercase().contains(q) || it.effect.lowercase().contains(q) || it.feeling.lowercase().contains(q)
+            }
+        }
+    }
     var deleteTarget by remember { mutableStateOf<MedLibraryEntry?>(null) }
     deleteTarget?.let { entry ->
         ConfirmDeleteDialog(title = entry.name, onConfirm = { onDelete(entry.id) }, onDismiss = { deleteTarget = null })
     }
-    if (entries.isEmpty()) {
+    if (entries.isEmpty() && query.isBlank()) {
         EmptyTabHint(s.libraryEmptyTitle, s.libraryEmptyBody)
         return
     }
@@ -465,6 +630,7 @@ fun LibraryList(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = contentPadding.calculateBottomPadding() + 96.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(key = "search") { SearchField(query) { query = it } }
         items(entries, key = { it.id }) { entry ->
             Card(
                 Modifier
@@ -568,6 +734,7 @@ fun NoteViewScreen(
 
 private const val NOTE_PAGES = 3
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditNoteScreen(
     vm: MainViewModel,
@@ -582,6 +749,10 @@ fun EditNoteScreen(
     var body by remember { mutableStateOf("") }
     var date by remember { mutableStateOf(LocalDate.now()) }
     var time by remember { mutableStateOf(LocalTime.now().withSecond(0).withNano(0)) }
+    var tags by remember { mutableStateOf("") }
+    // Заметку можно привязать к таблетке: «от этой тошнит».
+    var medId by remember { mutableStateOf<Long?>(null) }
+    var meds by remember { mutableStateOf<List<Medication>>(emptyList()) }
     var page by remember { mutableIntStateOf(0) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
@@ -592,12 +763,15 @@ fun EditNoteScreen(
                 title = n.title
                 description = n.description
                 body = n.body
+                tags = n.tags
+                medId = n.medId
                 val dt = n.atMillis.toLocalDateTime()
                 date = dt.toLocalDate()
                 time = dt.toLocalTime()
             }
             loaded = true
         }
+        meds = vm.activeMeds()
     }
 
     fun save() {
@@ -607,6 +781,8 @@ fun EditNoteScreen(
                 title = title.trim().ifBlank { if (Lang.code == "en") "Untitled" else "Без названия" },
                 description = description.trim(),
                 body = body.trim(),
+                tags = tags.split(',').map { it.trim() }.filter { it.isNotBlank() }.joinToString(", "),
+                medId = medId,
                 atMillis = LocalDateTime.of(date, time)
                     .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
             ),
@@ -701,6 +877,7 @@ fun EditNoteScreen(
                         value = title,
                         onValueChange = { title = it },
                         label = { Text(s.nameLabel) },
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -754,9 +931,32 @@ fun EditNoteScreen(
                         value = description,
                         onValueChange = { description = it },
                         label = { Text(s.noteDescLabel) },
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    OutlinedTextField(
+                        value = tags,
+                        onValueChange = { tags = it },
+                        label = { Text(Lang.s.noteTagsLabel) },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        singleLine = true,
+                        colors = fieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (meds.isNotEmpty()) {
+                        Text(Lang.s.noteMedLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = medId == null, onClick = { medId = null }, label = { Text(Lang.s.noteMedNone) })
+                            meds.forEach { med ->
+                                FilterChip(
+                                    selected = medId == med.id,
+                                    onClick = { medId = med.id },
+                                    label = { Text(med.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                )
+                            }
+                        }
+                    }
                 }
 
                 2 -> {
@@ -766,6 +966,7 @@ fun EditNoteScreen(
                         value = body,
                         onValueChange = { body = it },
                         label = { Text(s.noteBodyLabel) },
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         minLines = 8,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -876,6 +1077,7 @@ fun EditVisitScreen(
                 value = title,
                 onValueChange = { title = it },
                 label = { Text(s.visitTitleLabel) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 placeholder = { Text(s.visitTitlePlaceholder) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -903,6 +1105,7 @@ fun EditVisitScreen(
                 value = comment,
                 onValueChange = { comment = it },
                 label = { Text(s.visitCommentLabel) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 minLines = 3,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -930,6 +1133,8 @@ fun EditLibraryScreen(
     var showEndPicker by remember { mutableStateOf(false) }
     var effect by remember { mutableStateOf("") }
     var feeling by remember { mutableStateOf("") }
+    var libForm by remember { mutableStateOf("") }
+    var libDose by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf<String?>(null) }
 
     val photoLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -970,6 +1175,8 @@ fun EditLibraryScreen(
                 startDay = e.startEpochDay
                 endDay = e.endEpochDay
                 effect = e.effect
+                libForm = e.form
+                libDose = e.doseInfo
                 feeling = e.feeling
                 photoUri = e.photoUri
             }
@@ -1010,6 +1217,8 @@ fun EditLibraryScreen(
                                 name = name.trim(),
                                 startEpochDay = startDay,
                                 endEpochDay = endDay,
+                                form = libForm.trim(),
+                                doseInfo = libDose.trim(),
                                 effect = effect.trim(),
                                 feeling = feeling.trim(),
                                 photoUri = photoUri,
@@ -1039,6 +1248,7 @@ fun EditLibraryScreen(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text(s.libNameLabel) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1056,11 +1266,32 @@ fun EditLibraryScreen(
                 }
             }
             Text(s.libEndLabel + ": " + s.libEndHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Форму и дозировку подставит мастер таблетки при выборе из каталога.
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    colors = fieldColors(),
+                    value = libForm,
+                    onValueChange = { libForm = it },
+                    label = { Text(Lang.s.formQ) },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    colors = fieldColors(),
+                    value = libDose,
+                    onValueChange = { libDose = it },
+                    label = { Text(Lang.s.doseSection) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             OutlinedTextField(
                 colors = fieldColors(),
                 value = effect,
                 onValueChange = { effect = it },
                 label = { Text(s.libEffectLabel) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1069,6 +1300,7 @@ fun EditLibraryScreen(
                 value = feeling,
                 onValueChange = { feeling = it },
                 label = { Text(s.libFeelingLabel) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth(),
             )

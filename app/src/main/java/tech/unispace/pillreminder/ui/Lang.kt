@@ -486,6 +486,184 @@ interface S {
     val earlyConfirm: String
     val toToday: String
     fun versionLabel(v: String): String
+
+    // Расписание «по часам», напоминания о визитах, «отложить»
+    val scheduleSection: String
+    val scheduleBody: String
+    val modeWake: String
+    val modeClock: String
+    val clockTimesTitle: String
+    val clockTimesHint: String
+    val clockNoOffset: String
+    val byClockShort: String
+    val visitCustomAdd: String
+    val visitCustomTitle: String
+    val daysField: String
+    val hoursField: String
+    val snoozeOptionsTitle: String
+    val snoozeOptionsBody: String
+    val askTimesHint: String
+    fun snoozeFor(minutes: String): String
+
+    // Плавающий день, сон по кнопкам, еда, справка по корреляциям
+    val later: String
+    val dayDoneTitle: String
+    val dayDoneBody: String
+    val dayDoneHome: String
+    val newDayBtn: String
+    val resetDayTitle: String
+    val resetDayBody: String
+    val resetDayConfirm: String
+    val bedtimeBtn: String
+    fun bedtimeSaved(time: String): String
+    val mealBtn: String
+    fun mealSaved(time: String): String
+    val sleepWakeQuality: String
+    val sleepRateBtn: String
+    val sleepAutoBadge: String
+    val sleepAdviceTitle: String
+    fun sleepAdvice(bed: String, wake: String, duration: String): String
+    fun sleepAdviceNeedMore(n: Int): String
+    val sleepRateTitle: String
+    val askSleepTitle: String
+    val askSleepBody: String
+    val mealSection: String
+    val mealSectionBody: String
+    val mealNo: String
+    fun mealAfter(duration: String): String
+    val apartSection: String
+    val apartSectionBody: String
+    val apartNo: String
+    fun apartFor(duration: String): String
+    val corrInfoTitle: String
+    val corrInfoBody: String
+    val corrPairsTitle: String
+
+    // Быстрое сохранение, шаблоны, дубли, поиск, теги, биометрия
+    fun durationLabelShort(days: Int): String
+    val homeActionsTitle: String
+
+    // Третий пакет правок: сон, журнал, виджеты, конфликты правил
+    val periodDaysLabel: String
+    val periodCustomBtn: String
+    fun periodCustomSet(period: String): String
+    val dndWord: String
+    val mealImmediately: String
+    val sleepAdviceNeedData: String
+    val wakeRatingLine: String
+    val sleepShortTitle: String
+    fun sleepShortBody(duration: String): String
+    val sleepShortConfirm: String
+    val importFromHistoryTitle: String
+    fun importFromHistoryBody(n: Int): String
+    val importBtn: String
+    val heightFieldLabel: String
+    val journalFilters: String
+    val filterDoses: String
+    val filterMeals: String
+    val filterSleep: String
+    val eventWokeUp: String
+    val eventBed: String
+    val eventMeal: String
+    val pickWidgetTitle: String
+    val widgetNarrowName: String
+    val widgetWideName: String
+    val apartConflictHint: String
+
+    // Второй пакет UX-правок: цикл дня, графики, рекомендации, отчёт
+    fun bedtimeShort(time: String): String
+    val newDayConfirmTitle: String
+    val newDayConfirmBody: String
+    val recommendBtn: String
+    val recommendTitle: String
+    val recommendBody: String
+    val fromMeal: String
+    val chartStyleTitle: String
+    val chartStyleBody: String
+    val chartSmooth: String
+    val chartSharp: String
+    val createRemaining: String
+    val corrReportSection: String
+    val overlayMissing: String
+    val heightSubsection: String
+    val sexSubsection: String
+    val summaryHint: String
+    val visitsCalendarHint: String
+    fun mealsAt(times: String): String
+
+    // Пакет правок UX: мастер, трекеры, отчёт, еда, полноэкранный будильник, история версий
+    val formSection: String
+    val commentSection: String
+    val freqDurationQ: String
+    val freqDurationBody: String
+    val conditionsQ: String
+    val conditionsBody: String
+    val summaryQ: String
+    val summaryBody: String
+    val firstDoseSection: String
+    val apartPickLabel: String
+    val apartAny: String
+    val mealAfterSection: String
+    val mealBeforeSection: String
+    val mealNone: String
+    val mealCustom: String
+    val mealCustomTitle: String
+    fun mealAfterShort(duration: String): String
+    fun mealBeforeShort(duration: String): String
+    val trackerRemindSection: String
+    val trackerTimesSection: String
+    val trackerPresetsLabel: String
+    val trackerSelectedLabel: String
+    val trackerAddOwnTime: String
+    val trackerBodySection: String
+    val trackerNoTimes: String
+    val chartPointsLabel: String
+    val reportPeriodSection: String
+    val reportSectionsTitle: String
+    val reportExportTitle: String
+    val reportPreviewTitle: String
+    fun fsCloseIn(duration: String): String
+    val fsCloseNoRepeat: String
+    val changelogTitle: String
+    val versionUnreleased: String
+    val bedtimeDone: String
+    val homeActionsBody: String
+    val hideActions: String
+    val quickSaveBtn: String
+    val quickSaveTitle: String
+    val quickSaveBody: String
+    val quickSaveMore: String
+    val detailsQ: String
+    val detailsBody: String
+    val templatesSection: String
+    val tplMorningEvening: String
+    val tplAfterMeals: String
+    val tplCourse10: String
+    val photoPromptTitle: String
+    val photoPromptBody: String
+    val photoPromptAdd: String
+    val duplicateBtn: String
+    val copySuffix: String
+    val quickMoodTitle: String
+    val quickWeightTitle: String
+    val savedShort: String
+    val createAllTrackers: String
+    fun groupNotifTitle(n: Int): String
+    val takeAllAction: String
+    val widgetTake: String
+    fun stockUntil(date: String): String
+    val streakTitle: String
+    fun streakDays(n: Int): String
+    val adherenceTitle: String
+    val searchHint: String
+    val noteTagsLabel: String
+    val noteMedLabel: String
+    val noteMedNone: String
+    val lockTitle: String
+    val lockBody: String
+    val lockPrompt: String
+    val lockUnlock: String
+    val lockUnavailable: String
     val groupToday: String
     val groupYesterday: String
     val groupWeek: String
@@ -530,7 +708,7 @@ object RU : S {
     override val goodMorning = "Доброе утро"
     override val wakeIntro = "Расписание на сегодня ещё не построено. Нажмите, когда проснулись, — " +
         "все приёмы отсчитаются от этого момента."
-    override val iWokeUp = "Я проснулся"
+    override val iWokeUp = "Подъём"
     override fun wokeAt(time: String) = "Проснулись в $time"
     override val dayPlanned = "День уже размечен"
     override val shiftDay = "Сдвинуть"
@@ -543,10 +721,10 @@ object RU : S {
     override val takeNow = "Выпил сейчас"
     override fun notTodayEveryN(n: Int) =
         "Сегодня не нужно — приём раз в $n " + ruPlural(n, "день", "дня", "дней")
-    override val waitingWake = "Ждём кнопку «я проснулся»"
+    override val waitingWake = "Ждём кнопку «Подъём»"
     override fun allDone(taken: Int, total: Int) = "Всё выпито на сегодня · $taken из $total"
     override fun intakeOf(n: Int, total: Int) = "Приём $n из $total"
-    override val took = "Выпил"
+    override val took = "Выпито"
     override val skip = "Пропустить"
     override val pillFab = "Таблетка"
     override fun waitsFor(name: String) = "Ждёт таблетку «$name»"
@@ -572,16 +750,16 @@ object RU : S {
     override val commentBody = "Свободный текст — он будет висеть прямо под названием на главном " +
         "экране и попадёт в уведомление. Сюда пишут то, что легко забыть."
     override val commentLabel = "Комментарий"
-    override val commentPlaceholder = "за 15 минут до еды"
-    override val commentHint = "Например: «за 15 минут до еды», «запивать стаканом воды», " +
-        "«не вместе с кальцием». Можно оставить пустым."
+    override val commentPlaceholder = "Запивать полным стаканом воды"
+    override val commentHint = "Личная пометка: чем запивать, куда колоть, что проверить, " +
+        "«не вместе с кальцием». Связь с едой задаётся отдельным блоком. Можно оставить пустым."
     override val amountQ = "Сколько за один приём?"
     override val amountBody = "Не за день, а именно за один раз. Дробные значения тоже можно — " +
         "например 0.5, если таблетку надо делить."
     override val amountLabel = "Штук за приём"
     override val doseInfoLabel = "Дозировка, для справки"
     override val doseInfoPlaceholder = "500 мг"
-    override val doseInfoSupport = "Ни на что не влияет, просто подписывается"
+    override val doseInfoSupport = "Ни на что не влияет, подписывается для удобства"
     override val freqQ = "Как часто принимать?"
     override val freqBody = "Сколько раз за день — и надо ли пропускать дни."
     override val asNeededTitle = "По необходимости"
@@ -613,7 +791,7 @@ object RU : S {
     override val minutesLabel = "минут"
     override val firstDoseQ = "Когда первый приём?"
     override val firstDoseBody = "От чего отсчитывать первую таблетку дня: от кнопки " +
-        "«я проснулся» или от приёма другой таблетки. Так разводятся утренние: одна " +
+        "«Подъём» или от приёма другой таблетки. Так разводятся утренние: одна " +
         "«за 15 минут до еды» — сразу, другая — через 2 часа после первой."
     override val fromWake = "От пробуждения"
     override val afterOtherPill = "После другой таблетки"
@@ -636,8 +814,8 @@ object RU : S {
     override fun skippedAt(time: String) = "Пропущено в $time"
     override fun plannedAt(time: String) = "Запланировано на $time"
     override fun planLabel(time: String) = "план $time"
-    override val heatLegend = "Чем зеленее день, тем дисциплиннее пились таблетки. Пропуски и " +
-        "невыпитое делают день бледнее. Серый — приёмов не планировалось. " +
+    override val heatLegend = "Зелёный — в этот день выпито всё. Оранжевый — часть приёмов пропущена: " +
+        "чем бледнее, тем больше пропусков. Красный — не выпито ничего. Серый — приёмов не планировалось. " +
         "Нажатие на день открывает его журнал."
     override val monthNames = listOf(
         "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -647,7 +825,7 @@ object RU : S {
     override val weekNext = "Неделя вперёд"
 
     override val notesTab2 = "Заметки"
-    override val visitsTab2 = "Врачи"
+    override val visitsTab2 = "Визиты"
     override val notesEmptyTitle = "Заметок пока нет"
     override val notesEmptyBody = "Самочувствие, побочки, вопросы врачу — всё сюда."
     override val noteFab = "Заметка"
@@ -696,7 +874,7 @@ object RU : S {
     override val languageCard = "Язык / Language"
     override val repeatTitle = "Повторы напоминаний"
     override val repeatBody = "Смахнули уведомление и забыли — оно вернётся. " +
-        "Повторы прекращаются, как только нажат «Выпил» или «Пропустить»."
+        "Повторы прекращаются, как только нажато «Выпито» или «Пропустить»."
     override val repeatHowOften = "Как часто повторять"
     override val repeatHowMany = "Сколько раз повторить"
     override val customIntervalLabel = "Свой интервал, минут"
@@ -719,12 +897,12 @@ object RU : S {
     override val fsi14Note = "Android 14+ требует отдельное разрешение — без него будет " +
         "обычное уведомление."
     override val testSection = "Проверка"
-    override val testHint = "Заблокируйте экран после нажатия и подождите 10 секунд. " +
+    override val testHint = "Заблокируйте экран после нажатия и подождите 3 секунды. " +
         "Не пришло — смотрите «Доставку уведомлений»."
     override val testNormal = "Проверить обычное уведомление"
     override val testFullScreen = "Проверить во весь экран"
-    override val testScheduled = "Сигнал поставлен — придёт через 10 секунд"
-    override val testFsScheduled = "Полноэкранный сигнал через 10 секунд — заблокируйте экран"
+    override val testScheduled = "Сигнал поставлен — придёт через 3 секунды"
+    override val testFsScheduled = "Полноэкранный сигнал через 3 секунды — заблокируйте экран"
     override val deliveryTitle = "Доставка уведомлений"
     override val deliveryIntro = "Пройдите по пунктам сверху вниз. Пока хоть один горит жёлтым, " +
         "система может задержать или проглотить уведомление."
@@ -771,14 +949,14 @@ object RU : S {
     override val offset1d = "За 1 день"
     override val offset3h = "За 3 часа"
     override fun vendorHint(manufacturer: String): String = when (manufacturer.lowercase()) {
-        "xiaomi", "redmi", "poco" -> "Xiaomi/MIUI: Настройки → Приложения → Таблетки → " +
+        "xiaomi", "redmi", "poco" -> "Xiaomi/MIUI: Настройки → Приложения → «День приёма» → " +
             "«Автозапуск» включить, «Контроль активности» → «Нет ограничений». " +
             "Плюс в списке недавних закрепите приложение замочком."
-        "huawei", "honor" -> "Huawei/Honor: Настройки → Приложения → Таблетки → Батарея → " +
+        "huawei", "honor" -> "Huawei/Honor: Настройки → Приложения → «День приёма» → Батарея → " +
             "«Запуск приложений» переключить на ручное управление и включить все три пункта."
         "samsung" -> "Samsung (One UI) — самая душная оболочка, пройдите все четыре пункта:\n" +
-            "1. Настройки → Приложения → Таблетки → Батарея → «Без ограничений».\n" +
-            "2. Настройки → Приложения → Таблетки → «Будильники и напоминания» — включить.\n" +
+            "1. Настройки → Приложения → «День приёма» → Батарея → «Без ограничений».\n" +
+            "2. Настройки → Приложения → «День приёма» → «Будильники и напоминания» — включить.\n" +
             "3. Настройки → Обслуживание устройства → Батарея → «Ограничения фоновой работы»: " +
             "приложения не должно быть ни в «Спящих», ни в «Глубоко спящих».\n" +
             "4. Там же выключите «Переводить неиспользуемые приложения в спящий режим»."
@@ -805,9 +983,9 @@ object RU : S {
     override val fsClose = "Закрыть — напомнит ещё раз"
     override val visitNotifTitle = "Приём у врача"
 
-    override val widgetTitle = "Таблетки"
+    override val widgetTitle = "День приёма"
     override val widgetEmpty = "Всё выпито"
-    override val widgetNoPlan = "Нажмите «я проснулся» в приложении"
+    override val widgetNoPlan = "Нажмите «Подъём» в приложении"
 
     override fun pills(amount: Double, form: String): String {
         // Слово подбирается по форме выпуска: «3 капли», а не «капли · 3 таблетки».
@@ -887,12 +1065,12 @@ object RU : S {
     override val miscCard = "Конфиденциальность и запас"
     override val miscCardSub = "Скрытие названий, порог «таблетки заканчиваются»"
     override val thresholdLabel = "Напоминать о покупке, когда остаток опустится ниже этого числа"
-    override val wakeRemindCard = "Напоминание «я проснулся»"
+    override val wakeRemindCard = "Напоминание «Подъём»"
     override val wakeRemindBody = "Если к выбранному времени день не начат — придёт " +
         "уведомление с напоминанием нажать кнопку."
     override val wakeRemindTime = "Время напоминания"
     override val wakeRemindNotifTitle = "Проснулись?"
-    override val wakeRemindNotifBody = "Нажмите «я проснулся», чтобы построить " +
+    override val wakeRemindNotifBody = "Нажмите «Подъём», чтобы построить " +
         "расписание таблеток на день."
     override val libraryTab = "Каталог"
     override val libraryEmptyTitle = "Каталог пуст"
@@ -1068,16 +1246,16 @@ object RU : S {
     override val tutorialStart = "Начать"
     override val tutorialSkip = "Пропустить"
     override val tutorialSlides = listOf(
-        "Всё начинается с «Я проснулся»" to
+        "Всё начинается с кнопки «Подъём»" to
             "Расписание не привязано к часам. Утром нажмите кнопку — и все приёмы " +
             "отсчитаются от этого момента. Следующий приём считается от фактического " +
-            "«Выпил», а не от плана.",
+            "«Выпито», а не от плана.",
         "Таблетки" to
             "Добавляйте лекарства мастером по шагам: форма, комментарий, количество, " +
             "частота, курс, промежуток. Одну таблетку можно привязать к другой — «через 2 часа " +
             "после первой». Долгое нажатие по карточке удаляет, ручка ⠿ — меняет порядок.",
         "Уведомления" to
-            "Напоминание повторяется, пока не нажато «Выпил» или «Пропустить». Есть " +
+            "Напоминание повторяется, пока не нажато «Выпито» или «Пропустить». Есть " +
             "«Отложить», тихие часы, звук будильника и полноэкранный режим. Пройдите " +
             "чек-лист «Доставка уведомлений» — иначе система может их глушить.",
         "Заметки, врачи, каталог" to
@@ -1089,6 +1267,21 @@ object RU : S {
         "История и отчёт" to
             "Журнал по дням, тепловая карта дисциплины, отчёт для врача за период " +
             "(текст или PDF), бэкап всех данных в файл.",
+        "Как можно планировать приём" to
+            "От пробуждения — приёмы считаются от кнопки и от фактического «Выпито». " +
+            "По часам — стоят на фиксированном времени и кнопку не ждут. " +
+            "После другой таблетки — связанная запускается от приёма первой. " +
+            "По необходимости — без расписания, отмечается вручную. " +
+            "Плюс «через N дней» и курс на N дней с автоокончанием.",
+        "Что ещё внутри" to
+            "Отчёт для врача и бэкап всех данных в файл, виджет на рабочий стол, " +
+            "повторы напоминаний и «Отложить», тихие часы, будильник во весь экран, " +
+            "режим без названий в шторке, учёт остатка в упаковке и два языка.",
+        "День, сон и еда — по кнопкам" to
+            "День не заканчивается в полночь: он идёт от «Подъём» и живёт до 18 часов. " +
+            "Когда все приёмы отмечены, приложение предложит начать новый день, а долгое нажатие " +
+            "на карточку сверху сбрасывает день вручную. Кнопки «Сон» и «Еда» " +
+            "наполняют трекер сна и двигают приёмы, которые нельзя пить сразу после еды.",
     )
 
     override val tipsButton = "Советы"
@@ -1104,7 +1297,7 @@ object RU : S {
             "Поле «дозировка» в приложении — справочное. Любое изменение дозы или отмена — " +
             "только с врачом. Отчёт за период из настроек удобно взять с собой на приём.",
         "Пейте по расписанию, а не «когда вспомнил»" to
-            "Кнопка «Я проснулся» строит день так, чтобы промежутки между приёмами были " +
+            "Кнопка «Подъём» строит день так, чтобы промежутки между приёмами были " +
             "ровными. Пропустили — не удваивайте следующую дозу, отметьте «Пропустить».",
         "Следите за запасом" to
             "Укажите, сколько таблеток осталось — приложение напомнит о покупке заранее, " +
@@ -1131,7 +1324,199 @@ object RU : S {
     override val stockSection = "Остаток в упаковке"
     override val earlyTitle = "Ещё рано"
     override fun earlyBody(time: String, left: String) = "Этот приём запланирован на $time (через $left). Отметить как выпитый сейчас? Следующий приём отсчитается от этого момента."
-    override val earlyConfirm = "Всё равно выпил"
+    override val earlyConfirm = "Всё равно принять"
+    override val scheduleSection = "Когда напоминать"
+    override val scheduleBody = "От пробуждения — приёмы отсчитываются от кнопки «Подъём» и от фактического «Выпито». " +
+        "По часам — приёмы стоят на выбранных временах и не ждут кнопку."
+    override val modeWake = "От пробуждения"
+    override val modeClock = "По часам"
+    override val clockTimesTitle = "Времена приёма"
+    override val clockTimesHint = "Нажмите на время, чтобы изменить."
+    override val clockNoOffset = "У расписания по часам смещение от пробуждения не используется: приёмы стоят на выбранных временах."
+    override val byClockShort = "по часам"
+    override val visitCustomAdd = "Добавить своё время"
+    override val visitCustomTitle = "За сколько до визита"
+    override val daysField = "Дней"
+    override val hoursField = "Часов"
+    override val snoozeOptionsTitle = "Кнопки «Отложить»"
+    override val snoozeOptionsBody = "Выбранные варианты появятся кнопками на полноэкранном напоминании. Первый из них — кнопка в обычном уведомлении."
+    override val askTimesHint = "Нажмите на время, чтобы изменить; крестик удаляет."
+    override val later = "Позже"
+    override val dayDoneTitle = "Все приёмы отмечены"
+    override val dayDoneBody = "На сегодня всё. Когда проснётесь — нажмите «Подъём», и день начнётся заново."
+    override val dayDoneHome = "Все приёмы на сегодня выполнены."
+    override val newDayBtn = "Начать новый день"
+    override val resetDayTitle = "Начать день заново?"
+    override val resetDayBody = "Ожидающие приёмы перепланируются от текущего момента. Уже отмеченные останутся в истории. " +
+        "Пригодится, если цикл дня получился коротким и пора пить снова."
+    override val resetDayConfirm = "Начать заново"
+    override val bedtimeBtn = "Сон"
+    override fun bedtimeSaved(time: String) = "Записано: сон с $time"
+    override val mealBtn = "Еда"
+    override fun mealSaved(time: String) = "Записано: еда в $time"
+    override val sleepWakeQuality = "Как проснулись"
+    override val sleepRateBtn = "Оценить"
+    override val sleepAutoBadge = "по кнопкам"
+    override val sleepAdviceTitle = "Когда лучше ложиться"
+    override fun sleepAdvice(bed: String, wake: String, duration: String) =
+        "По ночам, которые вы оценили выше среднего: ложиться около $bed, вставать около $wake, спать примерно $duration."
+    override fun sleepAdviceNeedMore(n: Int) =
+        "Для объективной подсказки нужно больше данных: хотя бы " + ruPlural(n, "$n ночь", "$n ночи", "$n ночей") +
+            " со временем сна и оценкой."
+    override val sleepRateTitle = "Как спалось?"
+    override val askSleepTitle = "Спрашивать про сон при пробуждении"
+    override val askSleepBody = "Если вы нажали «Сон», то по кнопке «Подъём» появится запись сна и просьба оценить его."
+    override val mealSection = "Связь с едой"
+    override val mealSectionBody = "Кнопка «Еда» на главном двигает такие приёмы вперёд, если вы поели позже."
+    override val mealNo = "Неважно"
+    override fun mealAfter(duration: String) = "через $duration после еды"
+    override val apartSection = "Разносить с другими таблетками"
+    override val apartSectionBody = "Приём отодвинется, если рядом по времени выпита другая таблетка."
+    override val apartNo = "Неважно"
+    override fun apartFor(duration: String) = "не ближе $duration"
+    override val corrInfoTitle = "Как читать графики и пары"
+    override val corrInfoBody = "На графике каждая серия нормирована по своему диапазону: сравнивать нужно форму линий, а не высоту.\n\n" +
+        "Числа под графиком — коэффициент корреляции Пирсона (r) для пары серий по дням, где есть обе величины.\n\n" +
+        "• r близко к +1 — растут вместе;\n" +
+        "• r близко к −1 — одно растёт, другое падает;\n" +
+        "• около 0 — связи не видно.\n\n" +
+        "Грубо: |r| до 0,3 — слабо, 0,3–0,7 — средне, выше 0,7 — сильно. «—» значит, что общих дней меньше трёх.\n\n" +
+        "Корреляция не доказывает причину: совпадение может объясняться третьим фактором или случайностью. " +
+        "Это подсказка для наблюдения и разговора с врачом, а не вывод."
+    override fun durationLabelShort(days: Int) = "курс " + ruPlural(days, "$days день", "$days дня", "$days дней")
+    override val formSection = "Форма выпуска"
+    override val commentSection = "Заметка о приёме"
+    override val freqDurationQ = "Как часто и как долго?"
+    override val freqDurationBody = "Сколько раз в день, с каким промежутком и сколько дней длится курс."
+    override val conditionsQ = "Когда и с чем пить"
+    override val conditionsBody = "Начало дня, связь с едой и разнос с другими таблетками."
+    override val summaryQ = "Проверьте перед сохранением"
+    override val summaryBody = "Так таблетка будет выглядеть на главном экране."
+    override val firstDoseSection = "Первый приём"
+    override val apartPickLabel = "С какими таблетками разносить"
+    override val apartAny = "С любыми"
+    override val mealAfterSection = "После еды"
+    override val mealBeforeSection = "До еды"
+    override val mealNone = "Неважно"
+    override val mealCustom = "Своё…"
+    override val mealCustomTitle = "Своё время"
+    override fun mealAfterShort(duration: String) = "через $duration после еды"
+    override fun mealBeforeShort(duration: String) = "за $duration до еды"
+    override val trackerRemindSection = "Напоминания"
+    override val trackerTimesSection = "Когда спрашивать"
+    override val trackerPresetsLabel = "Добавить быстро"
+    override val trackerSelectedLabel = "Выбрано"
+    override val trackerAddOwnTime = "Своё время"
+    override val trackerBodySection = "Параметры тела"
+    override val trackerNoTimes = "Времена не выбраны — напоминаний не будет."
+    override val chartPointsLabel = "Точек"
+    override val reportPeriodSection = "Период"
+    override val reportSectionsTitle = "Что включить"
+    override val reportExportTitle = "Сохранить и отправить"
+    override val reportPreviewTitle = "Предпросмотр"
+    override fun fsCloseIn(duration: String) = "Закрыть — напомнит через $duration"
+    override val fsCloseNoRepeat = "Закрыть — повторов нет, напоминания не будет"
+    override val changelogTitle = "Что нового"
+    override val versionUnreleased = "в разработке"
+    override val bedtimeDone = "Сон записан"
+
+    override fun bedtimeShort(time: String) = "Сон с $time"
+    override val newDayConfirmTitle = "Начать новый день?"
+    override val newDayConfirmBody = "Текущий день закроется, а приёмы будут назначены заново от этого момента. " +
+        "Уже отмеченные приёмы останутся в истории. Делайте это, только если действительно начали новый цикл — " +
+        "иначе таблетки сместятся."
+    override val recommendBtn = "Рекомендации"
+    override val recommendTitle = "Как выбрать промежуток"
+    override val recommendBody = "Это только ориентир, а не назначение: 2 приёма — примерно 12 часов, 3 — 8 часов, " +
+        "4 — 5 часов, больше — равномерно по времени бодрствования.\n\n" +
+        "Если врач назначил другую схему — следуйте назначению врача, а не подсказке приложения."
+    override val fromMeal = "После еды"
+    override val chartStyleTitle = "Вид графиков"
+    override val chartStyleBody = "Сглаженная линия читается легче, ломаная точнее показывает отдельные замеры."
+    override val chartSmooth = "Сглаженный"
+    override val chartSharp = "Ломаный"
+    override val createRemaining = "Создать оставшиеся"
+    override val corrReportSection = "Связи между показателями"
+    override val overlayMissing = "Разрешение не выдано — экран будильника не откроется на разблокированном телефоне"
+    override val heightSubsection = "Рост"
+    override val sexSubsection = "Пол"
+    override val summaryHint = "Проверьте, всё ли верно. Изменить — кнопкой «Назад»."
+    override val visitsCalendarHint = "Точка под числом — в этот день есть визит"
+    override fun mealsAt(times: String) = "еда: $times"
+
+    override val periodDaysLabel = "Сколько дней"
+    override val periodCustomBtn = "Свой период…"
+    override fun periodCustomSet(period: String) = "Свой период: $period — изменить"
+    override val dndWord = "«Не беспокоить»"
+    override val mealImmediately = "Сразу"
+    override val sleepAdviceNeedData = "Для объективной подсказки нужно больше данных о сне."
+    override val wakeRatingLine = "Пробуждение"
+    override val sleepShortTitle = "Совсем мало сна"
+    override fun sleepShortBody(duration: String) = "С момента «Сон» прошло всего $duration. " +
+        "Взрослому нужно 7–9 часов: короткий сон бьёт по вниманию, настроению и давлению. " +
+        "Начать новый день всё равно?"
+    override val sleepShortConfirm = "Всё равно начать день"
+    override val importFromHistoryTitle = "Подтянуть данные из истории?"
+    override fun importFromHistoryBody(n: Int) = "В истории есть " + ruPlural(n, "$n ночь", "$n ночи", "$n ночей") +
+        " с отметками «Сон» и «Подъём». Их можно сразу перенести в трекер — оценку поставите позже."
+    override val importBtn = "Перенести"
+    override val heightFieldLabel = "Сантиметров"
+    override val journalFilters = "Показывать"
+    override val filterDoses = "Приёмы"
+    override val filterMeals = "Еда"
+    override val filterSleep = "Сон"
+    override val eventWokeUp = "Подъём"
+    override val eventBed = "Отход ко сну"
+    override val eventMeal = "Приём пищи"
+    override val pickWidgetTitle = "Какой виджет добавить?"
+    override val widgetNarrowName = "Компактный"
+    override val widgetWideName = "С кнопкой «Выпито»"
+    override val apartConflictHint = "Связанная таблетка исключена: её промежуток задаётся полем «через сколько после неё»."
+
+    override val homeActionsTitle = "Кнопки на главном экране"
+    override val homeActionsBody = "Ряд «Советы · Туториал · Отчёт · Ложусь спать · Поел» под карточкой пробуждения."
+    override val hideActions = "Скрыть кнопки"
+    override val quickSaveBtn = "Сохранить сейчас"
+    override val quickSaveTitle = "Сохранить так?"
+    override val quickSaveBody = "Остальное можно настроить позже. На главном экране карточка будет выглядеть так:"
+    override val quickSaveMore = "Настроить подробнее"
+    override val detailsQ = "Форма и заметка"
+    override val detailsBody = "Необязательный шаг: форма выпуска и личный комментарий вроде «за 15 минут до еды»."
+    override val templatesSection = "Готовые схемы"
+    override val tplMorningEvening = "Утро и вечер"
+    override val tplAfterMeals = "3 раза после еды"
+    override val tplCourse10 = "Курс 10 дней"
+    override val photoPromptTitle = "Добавить фото упаковки?"
+    override val photoPromptBody = "Дженерики разных производителей отличаются, и фото помогает не перепутать в аптеке. " +
+        "Это можно сделать и позже: «Записи» → «Каталог» → карточка лекарства."
+    override val photoPromptAdd = "Добавить фото"
+    override val duplicateBtn = "Дублировать"
+    override val copySuffix = "копия"
+    override val quickMoodTitle = "Как настроение?"
+    override val quickWeightTitle = "Вес"
+    override val savedShort = "Записано"
+    override val createAllTrackers = "Создать все три"
+    override fun groupNotifTitle(n: Int) = ruPlural(n, "$n таблетка", "$n таблетки", "$n таблеток")
+    override val takeAllAction = "Принять все"
+    override val widgetTake = "Выпито"
+    override fun stockUntil(date: String) = "хватит до $date"
+    override val streakTitle = "Без пропусков"
+    override fun streakDays(n: Int) = ruPlural(n, "$n день", "$n дня", "$n дней")
+    override val adherenceTitle = "Дисциплина по таблеткам"
+    override val searchHint = "Поиск"
+    override val noteTagsLabel = "Теги через запятую"
+    override val noteMedLabel = "О какой таблетке"
+    override val noteMedNone = "Общая"
+    override val lockTitle = "Вход по отпечатку или коду"
+    override val lockBody = "Спрашивать отпечаток или код устройства при каждом открытии приложения."
+    override val lockPrompt = "Разблокируйте, чтобы открыть приложение"
+    override val lockUnlock = "Разблокировать"
+    override val lockUnavailable = "На устройстве не настроены отпечаток или код блокировки"
+
+    override val corrPairsTitle = "Пары"
+
+    override fun snoozeFor(minutes: String) = "Отложить на $minutes"
+
     override fun versionLabel(v: String) = "День приёма · версия $v"
     override val toToday = "К сегодняшней дате"
     override val intervalAutoHint = "Подставлено автоматически: 2 приёма — 12 ч, 3 — 8 ч, 4 — 5 ч, больше — равномерно по 16 ч бодрствования. Если врач назначил иначе — поправьте."
@@ -1215,9 +1600,9 @@ object EN : S {
     override val commentBody = "Free text — it stays right under the name on the main screen " +
         "and goes into the notification. Write what's easy to forget."
     override val commentLabel = "Comment"
-    override val commentPlaceholder = "15 minutes before a meal"
-    override val commentHint = "For example: \"15 minutes before a meal\", \"drink with a glass " +
-        "of water\", \"not together with calcium\". Can be left empty."
+    override val commentPlaceholder = "Wash down with a full glass of water"
+    override val commentHint = "A personal note: what to wash it down with, where to inject, " +
+        "\"not together with calcium\". Food relation is a separate setting. Can be left empty."
     override val amountQ = "How much per intake?"
     override val amountBody = "Per single intake, not per day. Fractions are fine — " +
         "e.g. 0.5 if the pill needs splitting."
@@ -1277,8 +1662,9 @@ object EN : S {
     override fun skippedAt(time: String) = "Skipped at $time"
     override fun plannedAt(time: String) = "Planned for $time"
     override fun planLabel(time: String) = "plan $time"
-    override val heatLegend = "The greener the day, the better the discipline. Skips and " +
-        "missed intakes make it paler. Grey — nothing was planned. Tap a day to open its journal."
+    override val heatLegend = "Green — everything was taken that day. Orange — some intakes were missed: " +
+        "the paler, the more misses. Red — nothing was taken. Grey — nothing was planned. " +
+        "Tap a day to open its journal."
     override val monthNames = listOf(
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
@@ -1287,7 +1673,7 @@ object EN : S {
     override val weekNext = "Next week"
 
     override val notesTab2 = "Notes"
-    override val visitsTab2 = "Doctors"
+    override val visitsTab2 = "Visits"
     override val notesEmptyTitle = "No notes yet"
     override val notesEmptyBody = "How you feel, side effects, questions for the doctor — all here."
     override val noteFab = "Note"
@@ -1356,12 +1742,12 @@ object EN : S {
     override val fsi14Note = "Android 14+ requires a separate permission — without it you get " +
         "a regular notification."
     override val testSection = "Test"
-    override val testHint = "Lock the screen after tapping and wait 10 seconds. " +
+    override val testHint = "Lock the screen after tapping and wait 3 seconds. " +
         "Nothing arrived — check \"Notification delivery\"."
     override val testNormal = "Test regular notification"
     override val testFullScreen = "Test full screen"
-    override val testScheduled = "Scheduled — arrives in 10 seconds"
-    override val testFsScheduled = "Full-screen signal in 10 seconds — lock the screen"
+    override val testScheduled = "Scheduled — arrives in 3 seconds"
+    override val testFsScheduled = "Full-screen signal in 3 seconds — lock the screen"
     override val deliveryTitle = "Notification delivery"
     override val deliveryIntro = "Go through the items top to bottom. While any is yellow, " +
         "the system may delay or swallow a notification."
@@ -1407,14 +1793,14 @@ object EN : S {
     override val offset1d = "1 day before"
     override val offset3h = "3 hours before"
     override fun vendorHint(manufacturer: String): String = when (manufacturer.lowercase()) {
-        "xiaomi", "redmi", "poco" -> "Xiaomi/MIUI: Settings → Apps → this app → enable " +
+        "xiaomi", "redmi", "poco" -> "Xiaomi/MIUI: Settings → Apps → Dose Day → enable " +
             "\"Autostart\", set \"Battery saver\" to \"No restrictions\", and lock the app " +
             "in recents with the padlock."
-        "huawei", "honor" -> "Huawei/Honor: Settings → Apps → this app → Battery → " +
+        "huawei", "honor" -> "Huawei/Honor: Settings → Apps → Dose Day → Battery → " +
             "\"App launch\" to manual, enable all three toggles."
         "samsung" -> "Samsung (One UI) is the strictest — do all four:\n" +
-            "1. Settings → Apps → this app → Battery → \"Unrestricted\".\n" +
-            "2. Settings → Apps → this app → \"Alarms & reminders\" — enable.\n" +
+            "1. Settings → Apps → Dose Day → Battery → \"Unrestricted\".\n" +
+            "2. Settings → Apps → Dose Day → \"Alarms & reminders\" — enable.\n" +
             "3. Device care → Battery → background limits: the app must not be in " +
             "\"Sleeping\" or \"Deep sleeping\".\n" +
             "4. There, disable \"Put unused apps to sleep\"."
@@ -1441,7 +1827,7 @@ object EN : S {
     override val fsClose = "Close — it will remind again"
     override val visitNotifTitle = "Doctor appointment"
 
-    override val widgetTitle = "Pills"
+    override val widgetTitle = "Dose Day"
     override val widgetEmpty = "All taken"
     override val widgetNoPlan = "Tap \"I woke up\" in the app"
 
@@ -1721,6 +2107,21 @@ object EN : S {
         "History & report" to
             "Day journal, adherence heatmap, doctor report for a period (text or PDF), " +
             "full data backup to a file.",
+        "Ways to plan an intake" to
+            "From wake-up — intakes count from the button and from the actual \"Took it\". " +
+            "By clock — they sit at fixed times and don't wait for the button. " +
+            "After another pill — a linked one starts from the first one's intake. " +
+            "As needed — no schedule, marked by hand. " +
+            "Plus \"every N days\" and a course of N days that ends by itself.",
+        "What else is inside" to
+            "A doctor's report and a full data backup to a file, a home-screen widget, " +
+            "repeating reminders and \"Snooze\", quiet hours, a full-screen alarm, " +
+            "a mode without names in the shade, package stock tracking and two languages.",
+        "Day, sleep and meals by buttons" to
+            "The day does not end at midnight: it runs from \"I woke up\" and lives up to 18 hours. " +
+            "When every intake is marked, the app offers to start a new day, and a long press on the " +
+            "top card resets the day by hand. The \"Going to bed\" and \"Ate\" buttons fill the sleep " +
+            "tracker and push intakes that must not follow a meal too closely.",
     )
 
     override val tipsButton = "Tips"
@@ -1763,6 +2164,197 @@ object EN : S {
     override val earlyTitle = "Too early"
     override fun earlyBody(time: String, left: String) = "This intake is planned for $time (in $left). Mark it as taken now? The next intake will count from this moment."
     override val earlyConfirm = "Took it anyway"
+    override val scheduleSection = "When to remind"
+    override val scheduleBody = "From wake-up — intakes count from the \"I woke up\" button and from the actual \"Took it\". " +
+        "By clock — intakes sit at the chosen times and don't wait for the button."
+    override val modeWake = "From wake-up"
+    override val modeClock = "By clock"
+    override val clockTimesTitle = "Intake times"
+    override val clockTimesHint = "Tap a time to change it."
+    override val clockNoOffset = "A by-clock schedule ignores the wake-up offset: intakes stay at the chosen times."
+    override val byClockShort = "by clock"
+    override val visitCustomAdd = "Add your own lead time"
+    override val visitCustomTitle = "How long before the visit"
+    override val daysField = "Days"
+    override val hoursField = "Hours"
+    override val snoozeOptionsTitle = "\"Snooze\" buttons"
+    override val snoozeOptionsBody = "The chosen options appear as buttons on the full-screen reminder. The first one is the button in the regular notification."
+    override val askTimesHint = "Tap a time to change it; the cross removes it."
+    override val later = "Later"
+    override val dayDoneTitle = "Everything is marked"
+    override val dayDoneBody = "That's all for today. When you wake up, tap \"I woke up\" and the day starts over."
+    override val dayDoneHome = "All intakes for today are done."
+    override val newDayBtn = "Start a new day"
+    override val resetDayTitle = "Start the day over?"
+    override val resetDayBody = "Pending intakes will be re-planned from now. Already marked ones stay in history. " +
+        "Useful when your day cycle turned out short and it's time to take pills again."
+    override val resetDayConfirm = "Start over"
+    override val bedtimeBtn = "Sleep"
+    override fun bedtimeSaved(time: String) = "Saved: went to bed at $time"
+    override val mealBtn = "Ate"
+    override fun mealSaved(time: String) = "Saved: meal at $time"
+    override val sleepWakeQuality = "How you woke up"
+    override val sleepRateBtn = "Rate"
+    override val sleepAutoBadge = "by buttons"
+    override val sleepAdviceTitle = "Best time to sleep"
+    override fun sleepAdvice(bed: String, wake: String, duration: String) =
+        "Based on the nights you rated above average: go to bed around $bed, get up around $wake, sleep about $duration."
+    override fun sleepAdviceNeedMore(n: Int) =
+        "More data is needed for a meaningful suggestion: at least $n more night(s) with sleep times and a rating."
+    override val sleepRateTitle = "How did you sleep?"
+    override val askSleepTitle = "Ask about sleep on wake-up"
+    override val askSleepBody = "If you tapped \"Going to bed\", the \"I woke up\" button creates a sleep entry and asks you to rate it."
+    override val mealSection = "Relation to food"
+    override val mealSectionBody = "The \"Ate\" button on the home screen pushes such intakes forward if you ate later."
+    override val mealNo = "Doesn't matter"
+    override fun mealAfter(duration: String) = "$duration after a meal"
+    override val apartSection = "Keep apart from other pills"
+    override val apartSectionBody = "The intake moves later if another pill was taken close to it."
+    override val apartNo = "Doesn't matter"
+    override fun apartFor(duration: String) = "no closer than $duration"
+    override val corrInfoTitle = "How to read the chart and pairs"
+    override val corrInfoBody = "On the chart every series is normalized to its own range: compare the shape of the lines, not their height.\n\n" +
+        "The numbers below the chart are Pearson's correlation coefficient (r) for a pair of series, over days where both values exist.\n\n" +
+        "• r near +1 — they grow together;\n" +
+        "• r near −1 — one grows while the other falls;\n" +
+        "• near 0 — no visible link.\n\n" +
+        "Roughly: |r| up to 0.3 is weak, 0.3–0.7 moderate, above 0.7 strong. \"—\" means fewer than three shared days.\n\n" +
+        "Correlation does not prove cause: a match can come from a third factor or from chance. " +
+        "Treat it as a hint for observation and for a talk with your doctor, not as a conclusion."
+    override fun durationLabelShort(days: Int) = if (days == 1) "1-day course" else "$days-day course"
+    override val formSection = "Dosage form"
+    override val commentSection = "Intake note"
+    override val freqDurationQ = "How often and how long?"
+    override val freqDurationBody = "Times per day, the gap between them and the length of the course."
+    override val conditionsQ = "When and with what to take it"
+    override val conditionsBody = "Start of the day, relation to food and spacing from other pills."
+    override val summaryQ = "Check before saving"
+    override val summaryBody = "This is how the pill will look on the home screen."
+    override val firstDoseSection = "First intake"
+    override val apartPickLabel = "Keep apart from"
+    override val apartAny = "Any pill"
+    override val mealAfterSection = "After a meal"
+    override val mealBeforeSection = "Before a meal"
+    override val mealNone = "Doesn't matter"
+    override val mealCustom = "Custom…"
+    override val mealCustomTitle = "Custom time"
+    override fun mealAfterShort(duration: String) = "$duration after a meal"
+    override fun mealBeforeShort(duration: String) = "$duration before a meal"
+    override val trackerRemindSection = "Reminders"
+    override val trackerTimesSection = "When to ask"
+    override val trackerPresetsLabel = "Quick add"
+    override val trackerSelectedLabel = "Selected"
+    override val trackerAddOwnTime = "Custom time"
+    override val trackerBodySection = "Body parameters"
+    override val trackerNoTimes = "No times selected — there will be no reminders."
+    override val chartPointsLabel = "Points"
+    override val reportPeriodSection = "Period"
+    override val reportSectionsTitle = "What to include"
+    override val reportExportTitle = "Save and share"
+    override val reportPreviewTitle = "Preview"
+    override fun fsCloseIn(duration: String) = "Close — will remind in $duration"
+    override val fsCloseNoRepeat = "Close — repeats are off, there will be no reminder"
+    override val changelogTitle = "What's new"
+    override val versionUnreleased = "in development"
+    override val bedtimeDone = "Sleep saved"
+
+    override fun bedtimeShort(time: String) = "Sleep from $time"
+    override val newDayConfirmTitle = "Start a new day?"
+    override val newDayConfirmBody = "The current day closes and intakes are planned again from this moment. " +
+        "Already marked intakes stay in history. Do this only if a new cycle really started — " +
+        "otherwise the pills will shift."
+    override val recommendBtn = "Guidance"
+    override val recommendTitle = "How to choose the gap"
+    override val recommendBody = "This is a hint, not a prescription: 2 intakes — about 12 hours, 3 — 8 hours, " +
+        "4 — 5 hours, more — spread evenly over waking hours.\n\n" +
+        "If your doctor prescribed a different schedule — follow the doctor, not the app."
+    override val fromMeal = "After a meal"
+    override val chartStyleTitle = "Chart style"
+    override val chartStyleBody = "A smooth line is easier to read, a sharp one shows every single measurement."
+    override val chartSmooth = "Smooth"
+    override val chartSharp = "Sharp"
+    override val createRemaining = "Create the rest"
+    override val corrReportSection = "Links between metrics"
+    override val overlayMissing = "Permission not granted — the alarm screen won't open on an unlocked phone"
+    override val heightSubsection = "Height"
+    override val sexSubsection = "Sex"
+    override val summaryHint = "Check everything. To change something, use \"Back\"."
+    override val visitsCalendarHint = "A dot under the date means there is a visit that day"
+    override fun mealsAt(times: String) = "meals: $times"
+
+    override val periodDaysLabel = "How many days"
+    override val periodCustomBtn = "Custom period…"
+    override fun periodCustomSet(period: String) = "Custom period: $period — change"
+    override val dndWord = "Do not disturb"
+    override val mealImmediately = "Right away"
+    override val sleepAdviceNeedData = "More sleep data is needed for a meaningful suggestion."
+    override val wakeRatingLine = "Wake-up"
+    override val sleepShortTitle = "Very little sleep"
+    override fun sleepShortBody(duration: String) = "Only $duration passed since \"Going to bed\". " +
+        "An adult needs 7–9 hours: short sleep hits attention, mood and blood pressure. " +
+        "Start a new day anyway?"
+    override val sleepShortConfirm = "Woke up anyway"
+    override val importFromHistoryTitle = "Import data from history?"
+    override fun importFromHistoryBody(n: Int) = "History has $n night(s) with \"Going to bed\" and \"I woke up\" marks. " +
+        "They can be moved into the tracker right away — you can rate them later."
+    override val importBtn = "Import"
+    override val heightFieldLabel = "Centimetres"
+    override val journalFilters = "Show"
+    override val filterDoses = "Intakes"
+    override val filterMeals = "Meals"
+    override val filterSleep = "Sleep"
+    override val eventWokeUp = "Woke up"
+    override val eventBed = "Went to bed"
+    override val eventMeal = "Ate"
+    override val pickWidgetTitle = "Which widget to add?"
+    override val widgetNarrowName = "Compact"
+    override val widgetWideName = "With a \"Took it\" button"
+    override val apartConflictHint = "The linked pill is excluded: its gap is set by the \"how long after it\" field."
+
+    override val homeActionsTitle = "Buttons on the home screen"
+    override val homeActionsBody = "The row \"Tips · Tutorial · Report · Going to bed · Ate\" under the wake-up card."
+    override val hideActions = "Hide the buttons"
+    override val quickSaveBtn = "Save now"
+    override val quickSaveTitle = "Save it like this?"
+    override val quickSaveBody = "You can adjust the rest later. The home screen card will look like this:"
+    override val quickSaveMore = "Set up in detail"
+    override val detailsQ = "Form and note"
+    override val detailsBody = "Optional step: dosage form and a personal comment like \"15 minutes before a meal\"."
+    override val templatesSection = "Ready-made schedules"
+    override val tplMorningEvening = "Morning and evening"
+    override val tplAfterMeals = "3 times after meals"
+    override val tplCourse10 = "10-day course"
+    override val photoPromptTitle = "Add a package photo?"
+    override val photoPromptBody = "Generics from different makers differ, and a photo helps not to mix them up at the pharmacy. " +
+        "You can also do it later: \"Records\" → \"Catalog\" → the medication card."
+    override val photoPromptAdd = "Add a photo"
+    override val duplicateBtn = "Duplicate"
+    override val copySuffix = "copy"
+    override val quickMoodTitle = "How do you feel?"
+    override val quickWeightTitle = "Weight"
+    override val savedShort = "Saved"
+    override val createAllTrackers = "Create all three"
+    override fun groupNotifTitle(n: Int) = if (n == 1) "1 pill" else "$n pills"
+    override val takeAllAction = "Took all"
+    override val widgetTake = "Took it"
+    override fun stockUntil(date: String) = "lasts until $date"
+    override val streakTitle = "No misses"
+    override fun streakDays(n: Int) = if (n == 1) "1 day" else "$n days"
+    override val adherenceTitle = "Adherence per pill"
+    override val searchHint = "Search"
+    override val noteTagsLabel = "Tags, comma separated"
+    override val noteMedLabel = "About which pill"
+    override val noteMedNone = "General"
+    override val lockTitle = "Unlock with fingerprint or PIN"
+    override val lockBody = "Ask for a fingerprint or the device PIN every time the app opens."
+    override val lockPrompt = "Unlock to open the app"
+    override val lockUnlock = "Unlock"
+    override val lockUnavailable = "No fingerprint or screen lock is set up on this device"
+
+    override val corrPairsTitle = "Pairs"
+
+    override fun snoozeFor(minutes: String) = "Snooze for $minutes"
+
     override fun versionLabel(v: String) = "Dose Day · version $v"
     override val toToday = "Go to today"
     override val intervalAutoHint = "Filled in automatically: 2 intakes — 12 h, 3 — 8 h, 4 — 5 h, more — evenly over 16 waking hours. Adjust if your doctor prescribed otherwise."

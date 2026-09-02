@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Фон окна = background светлой темы (ui/theme/Theme.kt): под клавиатурой
+         и за системными панелями не должно быть чёрной полосы. -->
+    <color name="window_bg">#FFF4F8F6</color>
+</resources>

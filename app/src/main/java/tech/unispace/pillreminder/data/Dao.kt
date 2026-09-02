@@ -113,8 +113,33 @@ interface WakeDao {
     @Query("SELECT * FROM wake_events WHERE dayEpochDay = :day")
     suspend fun getDay(day: Long): WakeEvent?
 
+    /** Последнее пробуждение: «день» плавающий и не совпадает с календарным. */
+    @Query("SELECT * FROM wake_events ORDER BY wakeAt DESC LIMIT 1")
+    suspend fun latest(): WakeEvent?
+
+    @Query("SELECT * FROM wake_events ORDER BY wakeAt DESC LIMIT 1")
+    fun observeLatest(): Flow<WakeEvent?>
+
     @Upsert
     suspend fun upsert(event: WakeEvent)
+}
+
+@Dao
+interface MealDao {
+    @Query("SELECT * FROM meals ORDER BY atMillis DESC LIMIT 1")
+    suspend fun last(): MealEvent?
+
+    @Query("SELECT * FROM meals ORDER BY atMillis DESC")
+    suspend fun getAll(): List<MealEvent>
+
+    @Query("SELECT * FROM meals ORDER BY atMillis DESC LIMIT 1")
+    fun observeLast(): Flow<MealEvent?>
+
+    @Insert
+    suspend fun insert(meal: MealEvent): Long
+
+    @Query("DELETE FROM meals WHERE atMillis < :before")
+    suspend fun deleteOlderThan(before: Long)
 }
 
 @Dao

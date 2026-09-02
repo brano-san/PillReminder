@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Состояние устройства (флаг «гайд показан») не уезжает в облако: после переустановки
+     приложение должно снова встретить пользователя обучением. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="local_state.xml" />
+</full-backup-content>

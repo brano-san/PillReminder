@@ -21,8 +21,8 @@ android {
         applicationId = "tech.unispace.pillreminder"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     signingConfigs {
@@ -85,6 +85,9 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.biometric)
+    // biometric 1.1.0 ÑÑÐ½ÐµÑ ÑÑÐ°ÑÑÐ¹ fragment, Ð° ActivityResult API ÑÑÐµÐ±ÑÐµÑ 1.3+.
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)

@@ -63,7 +63,34 @@ data class Medication(
     val linkedDelayMinutes: Int = 120,
     /** Остаток таблеток в упаковке; null — не отслеживать. */
     val stockCount: Double? = null,
+    /**
+     * Приёмы «по часам»: CSV минут от полуночи («480,1200»). Пусто — расписание
+     * отсчитывается от кнопки «я проснулся». Число приёмов в дне = число времён.
+     */
+    val fixedTimes: String = "",
+    /** Пить не раньше чем через столько минут после еды; 0 — не важно. */
+    val afterMealMinutes: Int = 0,
+    /** Разносить с приёмом других таблеток минимум на столько минут; 0 — не важно. */
+    val apartFromOthersMinutes: Int = 0,
+    /**
+     * С какими именно таблетками разносить (CSV из id). Пусто при
+     * [apartFromOthersMinutes] > 0 — значит «с любыми другими».
+     */
+    val apartFromMedIds: String = "",
+    /** Принимать не позже чем за столько минут до еды; 0 — не важно. */
+    val beforeMealMinutes: Int = 0,
 )
+
+/** Список id таблеток, с которыми этот приём нужно разносить. */
+fun Medication.apartFromList(): List<Long> =
+    apartFromMedIds.split(',').mapNotNull { it.trim().toLongOrNull() }
+
+/** Времена приёма «по часам», минут от полуночи; пусто — расписание от пробуждения. */
+fun Medication.fixedTimesList(): List<Int> =
+    fixedTimes.split(',').mapNotNull { it.trim().toIntOrNull() }.filter { it in 0 until 24 * 60 }.sorted()
+
+/** Расписание привязано к часам, а не к пробуждению. */
+val Medication.byClock: Boolean get() = fixedTimesList().isNotEmpty()
 
 /** Курс закончился? */
 fun Medication.isExpiredOn(day: Long): Boolean =
@@ -86,6 +113,11 @@ data class Dose(
     /** Порядковый номер приёма внутри дня, начиная с 0. */
     val indexInDay: Int,
     val plannedAt: Long,
+    /**
+     * Исходное время до применения ограничений («после еды», «разносить»).
+     * Нужно, чтобы повторный пересчёт не сдвигал приём каждый раз заново.
+     */
+    val baseAt: Long? = null,
     val status: DoseStatus = DoseStatus.PENDING,
     val takenAt: Long? = null,
     val amount: Double,
@@ -98,6 +130,8 @@ data class Dose(
 data class WakeEvent(
     @PrimaryKey val dayEpochDay: Long,
     val wakeAt: Long,
+    /** Когда нажали «Ложусь спать»; null — день ещё идёт. */
+    val bedAt: Long? = null,
 )
 
 /** Свободная заметка с привязкой ко времени. */
@@ -108,6 +142,10 @@ data class Note(
     val description: String = "",
     val body: String = "",
     val atMillis: Long,
+    /** К какой таблетке относится заметка («от этой тошнит»); null — общая. */
+    val medId: Long? = null,
+    /** Теги через запятую — по ним ищут и фильтруют. */
+    val tags: String = "",
 )
 
 /** Визит к врачу — прошедший или будущий. */
@@ -134,6 +172,10 @@ data class MedLibraryEntry(
     val feeling: String = "",
     /** URI фото упаковки (SAF, с persistable-разрешением). */
     val photoUri: String? = null,
+    /** Форма выпуска — подставляется в мастер при выборе из каталога. */
+    val form: String = "",
+    /** Дозировка «500 мг» — тоже подставляется в мастер. */
+    val doseInfo: String = "",
 )
 
 /** Типы трекеров. */
@@ -180,6 +222,17 @@ data class TrackerEntry(
     val awakenings: Int = 0,
     /** Сон: пометки через запятую («кофе, маска»). */
     val tags: String = "",
+    /** Сон: отдельная оценка пробуждения 1–5; null — не оценивали. */
+    val wakeValue: Double? = null,
+    /** Запись собрана кнопками «Ложусь спать»/«Я проснулся», а не заполнена руками. */
+    val auto: Boolean = false,
+)
+
+/** Приём пищи: нужен для правила «пить через N минут после еды». */
+@Entity(tableName = "meals")
+data class MealEvent(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val atMillis: Long,
 )
 
 /** Разобрать [Tracker.askTimes] в отсортированный список минут. */

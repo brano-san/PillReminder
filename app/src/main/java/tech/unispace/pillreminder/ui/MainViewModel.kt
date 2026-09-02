@@ -16,6 +16,10 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import tech.unispace.pillreminder.data.TrackerType
+import tech.unispace.pillreminder.data.Settings
+import tech.unispace.pillreminder.data.MINUTE_MS
+import tech.unispace.pillreminder.data.CYCLE_MAX_MS
 import tech.unispace.pillreminder.alarm.TrackerAlarms
 import tech.unispace.pillreminder.alarm.VisitAlarms
 import tech.unispace.pillreminder.alarm.WakeReminder
@@ -31,6 +35,7 @@ import tech.unispace.pillreminder.data.Report
 import tech.unispace.pillreminder.data.Tracker
 import tech.unispace.pillreminder.data.TrackerEntry
 import tech.unispace.pillreminder.data.WakeEvent
+import tech.unispace.pillreminder.data.epochDayOf
 import tech.unispace.pillreminder.data.today
 import java.time.LocalDate
 
@@ -46,8 +51,17 @@ data class MedRow(
 data class HomeState(
     val now: Long = System.currentTimeMillis(),
     val wokeUpAt: Long? = null,
+    /** Все приёмы дня отмечены — можно начинать новый день. */
+    val allDone: Boolean = false,
     val rows: List<MedRow> = emptyList(),
     val loaded: Boolean = false,
+)
+
+/** Серия дней без пропусков и дисциплина по каждой таблетке. */
+data class AdherenceState(
+    val streak: Int = 0,
+    /** Название таблетки → процент вовремя отмеченных приёмов. */
+    val perMed: List<Pair<String, Int>> = emptyList(),
 )
 
 /** День журнала: приёмы + время подъёма. */
@@ -55,6 +69,10 @@ data class JournalState(
     val day: Long = today(),
     val doses: List<Dose> = emptyList(),
     val wakeAt: Long? = null,
+    /** Когда легли спать в этот день; null — кнопку не нажимали. */
+    val bedAt: Long? = null,
+    /** Время приёмов пищи за этот день. */
+    val meals: List<Long> = emptyList(),
 )
 
 /** Сводка одного дня для тепловой карты. */
@@ -89,16 +107,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private val dayFlow: Flow<Long> = ticker.map { today() }.distinctUntilChanged()
+    private val calendarDay: Flow<Long> = ticker.map { today() }.distinctUntilChanged()
+
+    /**
+     * Текущий незакрытый цикл: «день» держится на последнем пробуждении и живёт до
+     * [CYCLE_MAX_MS], а не до полуночи — график сна у человека плавающий.
+     */
+    private val cycleFlow: Flow<WakeEvent?> =
+        combine(db.wakeDao().observeLatest(), ticker) { wake, now ->
+            wake?.takeIf { it.bedAt == null && now - it.wakeAt in 0 until CYCLE_MAX_MS }
+        }.distinctUntilChanged()
+
+    private val dayFlow: Flow<Long> =
+        combine(cycleFlow, calendarDay) { cycle, day -> cycle?.dayEpochDay ?: day }.distinctUntilChanged()
+
+    init {
+        // Ð¡Ð¼ÐµÐ½Ð° ÑÑÑÐ¾Ðº Ð¿ÑÐ¸ Ð¾ÑÐºÑÑÑÐ¾Ð¼ Ð¿ÑÐ¸Ð»Ð¾Ð¶ÐµÐ½Ð¸Ð¸: Ð´Ð¾ÑÐ¾Ð·Ð´Ð°ÑÑ Ð¿ÑÐ¸ÑÐ¼Ñ Â«Ð¿Ð¾ ÑÐ°ÑÐ°Ð¼Â» Ð¸ Ð¿ÐµÑÐµÑÑÐ°Ð²Ð¸ÑÑ Ð±ÑÐ´Ð¸Ð»ÑÐ½Ð¸ÐºÐ¸.
+        viewModelScope.launch { dayFlow.collect { planner.rescheduleAlarms() } }
+    }
 
     val home: StateFlow<HomeState> =
-        dayFlow.flatMapLatest { day ->
+        combine(cycleFlow, calendarDay) { cycle, day -> cycle to (cycle?.dayEpochDay ?: day) }
+            .distinctUntilChanged()
+            .flatMapLatest { (cycle, day) ->
             combine(
                 db.medicationDao().observeActive(),
                 db.doseDao().observeDay(day),
-                db.wakeDao().observeDay(day),
                 ticker,
-            ) { meds, doses, wake, now ->
+            ) { meds, doses, now ->
                 val byMed = doses.groupBy { it.medId }
                 val nameById = meds.associate { it.id to it.name }
                 val rows = meds.map { med ->
@@ -107,12 +143,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         med = med,
                         dueToday = planner.isDueOn(med, day),
                         nextDose = list.filter { it.status == DoseStatus.PENDING }.minByOrNull { it.plannedAt },
-                        takenToday = list.count { it.status == DoseStatus.TAKEN },
-                        totalToday = if (list.isEmpty()) med.timesPerDay else list.size,
+                        // Считаем внутри текущего набора: во втором цикле суток «4 из 3» выглядело бы дико.
+                        takenToday = list.count { it.status == DoseStatus.TAKEN } % med.timesPerDay.coerceAtLeast(1),
+                        totalToday = med.timesPerDay.coerceAtLeast(1),
                         linkedParentName = med.linkedToMedId?.let { nameById[it] },
                     )
                 }
-                HomeState(now = now, wokeUpAt = wake?.wakeAt, rows = rows, loaded = true)
+                HomeState(
+                    now = now,
+                    wokeUpAt = cycle?.wakeAt,
+                    allDone = doses.isNotEmpty() && doses.none { it.status == DoseStatus.PENDING },
+                    rows = rows,
+                    loaded = true,
+                )
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeState())
 
@@ -124,8 +167,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         combine(
             db.doseDao().observeDay(day),
             db.wakeDao().observeDay(day),
-        ) { doses, wake ->
-            JournalState(day = day, doses = doses.sortedBy { it.plannedAt }, wakeAt = wake?.wakeAt)
+            db.mealDao().observeLast(),
+        ) { doses, wake, _ ->
+            // Еда хранится отдельной таблицей — берём приёмы пищи этого дня.
+            val meals = db.mealDao().getAll()
+                .map { it.atMillis }
+                .filter { epochDayOf(it) == day }
+                .sorted()
+            JournalState(
+                day = day,
+                doses = doses.sortedBy { it.plannedAt },
+                wakeAt = wake?.wakeAt,
+                bedAt = wake?.bedAt,
+                meals = meals,
+            )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), JournalState())
 
@@ -278,7 +333,127 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Действия ----------
 
-    fun wakeUp() = viewModelScope.launch { planner.wakeUp() }
+    /** Запись сна, собранная кнопками: её надо предложить оценить. */
+    val sleepToRate = MutableStateFlow<TrackerEntry?>(null)
+
+    /**
+     * Дисциплина за последние [days] дней и текущая серия дней без пропусков.
+     * День считается «чистым», если в нём были приёмы и все они отмечены как выпитые.
+     */
+    suspend fun adherence(days: Int = 30): AdherenceState {
+        val to = today()
+        val from = to - days + 1
+        val all = db.doseDao().getAll().filter { it.dayEpochDay in from..to }
+        val byDay = all.groupBy { it.dayEpochDay }
+
+        var streak = 0
+        var day = to
+        while (day >= from) {
+            val list = byDay[day].orEmpty()
+            // Пустой день (ничего не назначено) серию не рвёт и не удлиняет.
+            if (list.isNotEmpty()) {
+                if (list.all { it.status == DoseStatus.TAKEN }) streak++ else break
+            } else if (day != to) {
+                break
+            }
+            day--
+        }
+
+        val perMed = all.groupBy { it.medNameSnapshot }
+            .mapNotNull { (name, list) ->
+                val counted = list.filter { it.status != DoseStatus.PENDING || it.plannedAt < System.currentTimeMillis() }
+                if (counted.isEmpty()) return@mapNotNull null
+                name to (counted.count { it.status == DoseStatus.TAKEN } * 100 / counted.size)
+            }
+            .sortedBy { it.second }
+
+        return AdherenceState(streak = streak, perMed = perMed)
+    }
+
+    fun wakeUp() = viewModelScope.launch {
+        val now = System.currentTimeMillis()
+        planner.wakeUp(now)
+        logSleepIfPending(now)
+    }
+
+    /** «Ложусь спать»: запоминаем момент, сама запись появится при пробуждении. */
+    fun goToBed(now: Long = System.currentTimeMillis()) = viewModelScope.launch {
+        // Момент нужен и трекеру сна (при пробуждении), и истории дня.
+        Settings(getApplication()).pendingSleepStart = now
+        planner.goToBed(now)
+    }
+
+    /** «Поел»: фиксируем еду и двигаем приёмы, которые нельзя пить сразу после неё. */
+    fun recordMeal() = viewModelScope.launch { planner.recordMeal() }
+
+    /** Оценка сна и пробуждения для записи, собранной кнопками. */
+    fun rateSleep(entry: TrackerEntry, sleep: Int, wake: Int) = viewModelScope.launch {
+        db.trackerDao().upsertEntry(
+            entry.copy(
+                value = sleep.toDouble(),
+                wakeValue = if (wake > 0) wake.toDouble() else null,
+            ),
+        )
+        sleepToRate.value = null
+    }
+
+    fun dismissSleepRating() {
+        sleepToRate.value = null
+    }
+
+    /**
+     * Пробуждение после нажатой кнопки «Ложусь спать» — создаём запись сна и просим оценить.
+     * Слишком короткий промежуток (меньше часа) считаем ошибкой нажатия, а не сном.
+     */
+    private suspend fun logSleepIfPending(now: Long) {
+        val settings = Settings(getApplication())
+        val start = settings.pendingSleepStart
+        settings.pendingSleepStart = 0L
+        if (!settings.askSleepOnWake) return
+        val tracker = db.trackerDao().getAll().firstOrNull { it.type == TrackerType.SLEEP } ?: return
+        // Спрашиваем при каждом пробуждении: без кнопки «Ложусь спать» просто не знаем,
+        // когда человек лёг, — запись будет только с оценками.
+        val known = start > 0L && now - start >= 60 * MINUTE_MS
+        val entry = TrackerEntry(
+            trackerId = tracker.id,
+            atMillis = now,
+            value = 0.0,
+            sleepStart = if (known) start else null,
+            sleepEnd = if (known) now else null,
+            auto = true,
+        )
+        val id = db.trackerDao().upsertEntry(entry)
+        sleepToRate.value = entry.copy(id = id)
+    }
+
+    /** Ночи из истории («лёг» + «проснулся»), которых ещё нет в трекере сна. */
+    suspend fun sleepHistoryCandidates(): List<Pair<Long, Long>> {
+        val tracker = db.trackerDao().getAll().firstOrNull { it.type == TrackerType.SLEEP }
+        val existing = tracker?.let { t ->
+            db.trackerDao().getAllEntries().filter { it.trackerId == t.id }.mapNotNull { it.sleepStart }.toSet()
+        }.orEmpty()
+        return db.wakeDao().getAll()
+            .mapNotNull { w -> w.bedAt?.let { bed -> bed to w.wakeAt } }
+            .filter { (bed, wake) -> wake > bed && wake - bed >= 60 * MINUTE_MS && bed !in existing }
+            .sortedBy { it.first }
+    }
+
+    /** Перенести ночи из истории в трекер сна — без оценок, их можно проставить позже. */
+    fun importSleepHistory(trackerId: Long, nights: List<Pair<Long, Long>>) = viewModelScope.launch {
+        nights.forEach { (bed, wake) ->
+            db.trackerDao().upsertEntry(
+                TrackerEntry(
+                    trackerId = trackerId,
+                    atMillis = wake,
+                    value = 0.0,
+                    sleepStart = bed,
+                    sleepEnd = wake,
+                    auto = true,
+                ),
+            )
+        }
+    }
+
 
     fun take(doseId: Long) = viewModelScope.launch { planner.markTaken(doseId) }
 
@@ -295,6 +470,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         orderedIds.forEachIndexed { index, id ->
             db.medicationDao().setSortOrder(id, index)
         }
+    }
+
+    /** Копия таблетки: у людей часто 2–3 препарата по одной схеме. */
+    fun duplicateMed(medId: Long, onDone: (Long) -> Unit = {}) = viewModelScope.launch {
+        val med = db.medicationDao().getById(medId) ?: return@launch
+        val order = db.medicationDao().getActive().maxOfOrNull { it.sortOrder } ?: 0
+        val id = db.medicationDao().insert(
+            med.copy(
+                id = 0,
+                name = med.name + " (" + Lang.s.copySuffix + ")",
+                sortOrder = order + 1,
+                stockCount = null,
+            ),
+        )
+        planner.refreshMedToday(id)
+        onDone(id)
     }
 
     fun finishCourse(medId: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
@@ -314,6 +505,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             toSave.id
         }
         planner.refreshMedToday(id)
+        // Новая таблетка сразу попадает в каталог, чтобы не заводить её там руками.
+        if (toSave.id == 0L && db.libraryDao().getAll().none { it.name.equals(toSave.name, ignoreCase = true) }) {
+            db.libraryDao().upsert(
+                MedLibraryEntry(
+                    name = toSave.name,
+                    form = toSave.form,
+                    doseInfo = toSave.doseInfo,
+                    startEpochDay = toSave.cycleStartEpochDay,
+                    endEpochDay = if (toSave.durationDays > 0) toSave.cycleStartEpochDay + toSave.durationDays else null,
+                ),
+            )
+        }
         onDone(id)
     }
 

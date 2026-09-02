@@ -5,6 +5,11 @@
 
 package tech.unispace.pillreminder.ui
 
+import android.widget.Toast
+import tech.unispace.pillreminder.data.TrackerEntry
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -31,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
@@ -52,6 +58,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -87,7 +95,13 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.alarm.formatAmount
 import tech.unispace.pillreminder.alarm.trackerDisplayName
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import tech.unispace.pillreminder.data.Medication
+import tech.unispace.pillreminder.data.TrackerType
 import tech.unispace.pillreminder.data.Dose
+import tech.unispace.pillreminder.data.byClock
+import tech.unispace.pillreminder.data.fixedTimesList
 import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.data.epochDayOf
 import tech.unispace.pillreminder.data.today
@@ -131,6 +145,13 @@ fun HomeScreen(
     onOpenTips: () -> Unit,
     onOpenTutorial: () -> Unit,
     onOpenReport: () -> Unit,
+    onBedtime: () -> Unit,
+    onMeal: () -> Unit,
+    sleepToRate: TrackerEntry?,
+    onRateSleep: (TrackerEntry, Int, Int) -> Unit,
+    onDismissSleepRating: () -> Unit,
+    onDuplicate: (Long) -> Unit,
+    onQuickEntry: (TrackerEntry) -> Unit,
 ) {
     val s = Lang.s
     val context = LocalContext.current
@@ -158,6 +179,77 @@ fun HomeScreen(
     deleteTarget?.let { row ->
         ConfirmDeleteDialog(title = row.med.name, onConfirm = { onDelete(row.med.id) }, onDismiss = { deleteTarget = null })
     }
+    // Долгое нажатие теперь предлагает выбор: копия схемы нужна чаще, чем удаление.
+    var actionTarget by remember { mutableStateOf<MedRow?>(null) }
+    actionTarget?.let { row ->
+        AlertDialog(
+            onDismissRequest = { actionTarget = null },
+            title = { Text(row.med.name) },
+            text = null,
+            confirmButton = {
+                TextButton(onClick = {
+                    onDuplicate(row.med.id)
+                    actionTarget = null
+                }) { Text(s.duplicateBtn) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    deleteTarget = row
+                    actionTarget = null
+                }) { Text(s.delete) }
+            },
+        )
+    }
+    // Меньше четырёх часов сна — почти всегда ошибка нажатия, поэтому переспрашиваем.
+    var shortSleep by remember { mutableStateOf<Long?>(null) }
+    shortSleep?.let { slept ->
+        AlertDialog(
+            onDismissRequest = { shortSleep = null },
+            title = { Text(s.sleepShortTitle) },
+            text = { Text(s.sleepShortBody(s.duration((slept / 60_000L).toInt()))) },
+            confirmButton = {
+                TextButton(onClick = {
+                    shortSleep = null
+                    onWakeUp()
+                }) { Text(s.sleepShortConfirm) }
+            },
+            dismissButton = { TextButton(onClick = { shortSleep = null }) { Text(s.cancel) } },
+        )
+    }
+    fun wakeUpChecked() {
+        val bedAt = Settings(context).pendingSleepStart
+        val slept = System.currentTimeMillis() - bedAt
+        if (bedAt > 0 && slept < SHORT_SLEEP_MS) shortSleep = slept else onWakeUp()
+    }
+
+    // Сон, собранный кнопками «Ложусь спать» → «Я проснулся»: просим оценить сразу.
+    sleepToRate?.let { entry ->
+        var sleepRating by remember(entry.id) { mutableIntStateOf(4) }
+        var wakeRating by remember(entry.id) { mutableIntStateOf(4) }
+        AlertDialog(
+            onDismissRequest = onDismissSleepRating,
+            title = { Text(s.sleepRateTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    entry.sleepStart?.let { start ->
+                        Text(
+                            formatClock(start) + " — " + formatClock(entry.sleepEnd ?: entry.atMillis) +
+                                " · " + s.duration(((entry.atMillis - start) / 60_000L).toInt()),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(s.sleepQualityLabel, style = MaterialTheme.typography.titleSmall)
+                    EmojiRating(sleepRating) { sleepRating = it }
+                    Text(s.sleepWakeQuality, style = MaterialTheme.typography.titleSmall)
+                    EmojiRating(wakeRating) { wakeRating = it }
+                }
+            },
+            confirmButton = { TextButton(onClick = { onRateSleep(entry, sleepRating, wakeRating) }) { Text(s.save) } },
+            dismissButton = { TextButton(onClick = onDismissSleepRating) { Text(s.later) } },
+        )
+    }
+
     val minuteKey = state.now / 60_000
     val deliveryFine = remember(minuteKey) { deliveryOk(context) }
     val showWakeButton = state.wokeUpAt == null && state.loaded
@@ -191,7 +283,9 @@ fun HomeScreen(
                 }
             }
 
-            item(key = "wake") { WakeCard(state, onWakeUp, onOpenTips, onOpenTutorial, onOpenReport) }
+            item(key = "wake") {
+                WakeCard(state, onWakeUp, onOpenTips, onOpenTutorial, onOpenReport, onBedtime, onMeal)
+            }
 
             if (state.rows.isEmpty() && state.loaded) {
                 item(key = "empty") { EmptyHint() }
@@ -214,7 +308,8 @@ fun HomeScreen(
                 MedCard(
                     row = row,
                     now = state.now,
-                    awake = state.wokeUpAt != null,
+                    // Расписание «по часам» живёт без кнопки «я проснулся».
+                    awake = state.wokeUpAt != null || row.med.byClock,
                     compact = compact,
                     onTake = { doseId ->
                         onTake(doseId)
@@ -226,7 +321,7 @@ fun HomeScreen(
                         confirmWithUndo(s.snackSkipped(row.med.name), doseId)
                     },
                     onEdit = onEdit,
-                    onLongPress = { deleteTarget = it },
+                    onLongPress = { actionTarget = it },
                     cardModifier = Modifier
                         // Модификатор стабилен между кадрами: тянущаяся карточка просто без
                         // анимации размещения — иначе при смене цепочки она «телепортируется».
@@ -279,7 +374,7 @@ fun HomeScreen(
             }
 
             items(trackerRows, key = { "tracker-" + it.tracker.id }) { row ->
-                TrackerReminderCard(row, onOpenTracker)
+                TrackerReminderCard(row, onOpenTracker, onQuickEntry)
             }
         }
 
@@ -292,9 +387,10 @@ fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // Один слот на весь суточный цикл: утром это «Я проснулся», днём — «Ложусь спать».
             if (showWakeButton) {
                 Button(
-                    onClick = onWakeUp,
+                    onClick = { wakeUpChecked() },
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.weight(1f).height(56.dp),
                 ) {
@@ -303,7 +399,46 @@ fun HomeScreen(
                     Text(s.iWokeUp, style = MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false)
                 }
             } else {
-                Spacer(Modifier.weight(1f))
+                val bedtimeAt = remember(state.now / 60_000) { Settings(context).pendingSleepStart }
+                FilledTonalButton(
+                    onClick = {
+                        onBedtime()
+                        Toast.makeText(context, s.bedtimeSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    modifier = Modifier.weight(1f).height(56.dp),
+                ) {
+                    Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (bedtimeAt > 0) s.bedtimeShort(formatClock(bedtimeAt)) else s.bedtimeBtn,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // «Поел» рядом: обе кнопки относятся к текущему дню.
+                FilledTonalButton(
+                    onClick = {
+                        onMeal()
+                        Toast.makeText(context, s.mealSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    modifier = Modifier.weight(1f).height(56.dp),
+                ) {
+                    Icon(Icons.Default.Restaurant, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        s.mealBtn,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             ExtendedFloatingActionButton(
                 onClick = onAdd,
@@ -326,20 +461,42 @@ private fun WakeCard(
     onOpenTips: () -> Unit,
     onOpenTutorial: () -> Unit,
     onOpenReport: () -> Unit,
+    onBedtime: () -> Unit,
+    onMeal: () -> Unit,
 ) {
     val s = Lang.s
+    val context = LocalContext.current
+    val settings = remember { Settings(context) }
+    // Новый день сдвигает все приёмы, поэтому спрашиваем подтверждение.
+    var confirmNewDay by remember { mutableStateOf(false) }
+    if (confirmNewDay) {
+        AlertDialog(
+            onDismissRequest = { confirmNewDay = false },
+            title = { Text(s.newDayConfirmTitle) },
+            text = { Text(s.newDayConfirmBody) },
+            confirmButton = { TextButton(onClick = { confirmNewDay = false; onWakeUp() }) { Text(s.newDayBtn) } },
+            dismissButton = { TextButton(onClick = { confirmNewDay = false }) { Text(s.cancel) } },
+        )
+    }
+    var showActions by remember { mutableStateOf(settings.showHomeActions) }
     var confirmShift by remember { mutableStateOf(false) }
     if (confirmShift) {
         AlertDialog(
             onDismissRequest = { confirmShift = false },
-            title = { Text(s.shiftConfirmTitle) },
-            text = { Text(s.shiftConfirmBody) },
-            confirmButton = { TextButton(onClick = { confirmShift = false; onWakeUp() }) { Text(s.shiftDay) } },
+            title = { Text(s.resetDayTitle) },
+            text = { Text(s.resetDayBody) },
+            confirmButton = { TextButton(onClick = { confirmShift = false; onWakeUp() }) { Text(s.resetDayConfirm) } },
             dismissButton = { TextButton(onClick = { confirmShift = false }) { Text(s.cancel) } },
         )
     }
 
-    ElevatedCard(Modifier.fillMaxWidth()) {
+    // Ручной сброс дня спрятан под долгое нажатие: он нужен редко, а злоупотреблять им вредно.
+    ElevatedCard(
+        Modifier.fillMaxWidth().combinedClickable(
+            onClick = {},
+            onLongClick = { if (state.wokeUpAt != null) confirmShift = true },
+        ),
+    ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.WbSunny, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -353,26 +510,23 @@ private fun WakeCard(
                         Text(s.dayPlanned, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                if (state.wokeUpAt != null) {
-                    TextButton(onClick = { confirmShift = true }) { Text(s.shiftDay, maxLines = 1, softWrap = false) }
+            }
+            if (state.wokeUpAt != null && state.allDone) {
+                Spacer(Modifier.height(8.dp))
+                Text(s.dayDoneHome, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(6.dp))
+                Button(onClick = { confirmNewDay = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(s.newDayBtn, maxLines = 1, softWrap = false)
                 }
             }
-            Spacer(Modifier.height(4.dp))
-            FlowRow {
-                TextButton(onClick = onOpenTips, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                    Icon(Icons.Default.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(s.tipsButton)
-                }
-                TextButton(onClick = onOpenTutorial, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                    Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(s.tutorialBtn)
-                }
-                TextButton(onClick = onOpenReport, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                    Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(s.reportBtn)
+            if (showActions) {
+                Spacer(Modifier.height(4.dp))
+                // Кнопки одинаковой ширины: ряд не «прыгает» из-за разной длины подписей.
+                // Компактный ряд: место на экране нужнее таблеткам, чем кнопкам.
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    HomeActionButton(Icons.Default.Description, s.reportBtn, Modifier.weight(1f), onOpenReport)
+                    HomeActionButton(Icons.Default.Lightbulb, s.tipsButton, Modifier.weight(1f), onOpenTips)
+                    HomeActionButton(Icons.Default.School, s.tutorialBtn, Modifier.weight(1f), onOpenTutorial)
                 }
             }
         }
@@ -380,14 +534,19 @@ private fun WakeCard(
 }
 
 @Composable
-private fun TrackerReminderCard(row: TrackerRow, onOpen: (Long) -> Unit) {
+private fun TrackerReminderCard(
+    row: TrackerRow,
+    onOpen: (Long) -> Unit,
+    onQuickEntry: (TrackerEntry) -> Unit,
+) {
     val s = Lang.s
     val last = row.entries.firstOrNull()
     val lastDay = last?.let { epochDayOf(it.atMillis) }
     val doneToday = lastDay == today()
 
     Card(Modifier.fillMaxWidth().clickable { onOpen(row.tracker.id) }) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+      Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(trackerIcon(row.tracker.type), contentDescription = null, tint = if (doneToday) GREEN else MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -404,6 +563,86 @@ private fun TrackerReminderCard(row: TrackerRow, onOpen: (Long) -> Unit) {
             }
             if (doneToday) Icon(Icons.Default.Check, contentDescription = null, tint = GREEN)
         }
+        // Кулдаун вместо «раз в день»: настроение и вес часто хочется поправить сразу.
+        val quietFor = last != null && System.currentTimeMillis() - last.atMillis < QUICK_ENTRY_COOLDOWN_MS
+        if (!quietFor) QuickTrackerEntry(row, onQuickEntry)
+      }
+    }
+}
+
+/** Кнопка ряда действий: иконка над подписью, ширина — по колонке. */
+@Composable
+private fun HomeActionButton(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = modifier.height(34.dp),
+        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** Короче этого сон считается случайным нажатием и требует подтверждения. */
+const val SHORT_SLEEP_MS = 4 * 60 * 60_000L
+
+/** Через сколько после записи снова предлагать быстрый ввод на карточке. */
+const val QUICK_ENTRY_COOLDOWN_MS = 5 * 60_000L
+
+/** Запись трекера в один тап прямо с главной: настроение — эмодзи, вес — шаг 0,1 кг. */
+@Composable
+private fun QuickTrackerEntry(row: TrackerRow, onQuickEntry: (TrackerEntry) -> Unit) {
+    val s = Lang.s
+    val context = LocalContext.current
+    when (row.tracker.type) {
+        TrackerType.MOOD -> {
+            Text(s.quickMoodTitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            EmojiRating(0) { value ->
+                onQuickEntry(TrackerEntry(trackerId = row.tracker.id, atMillis = System.currentTimeMillis(), value = value.toDouble()))
+                Toast.makeText(context, s.savedShort, Toast.LENGTH_SHORT).show()
+            }
+        }
+        TrackerType.WEIGHT -> {
+            var value by remember(row.entries.firstOrNull()?.id) {
+                mutableStateOf(row.entries.firstOrNull()?.value ?: 70.0)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { value = (value - 0.1).coerceAtLeast(1.0) }, contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    Text("−0,1", maxLines = 1, softWrap = false)
+                }
+                Text(trimNum(value), fontWeight = FontWeight.SemiBold)
+                OutlinedButton(onClick = { value = (value + 0.1).coerceAtMost(500.0) }, contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    Text("+0,1", maxLines = 1, softWrap = false)
+                }
+                Spacer(Modifier.weight(1f))
+                Button(
+                    onClick = {
+                        onQuickEntry(
+                            TrackerEntry(
+                                trackerId = row.tracker.id,
+                                atMillis = System.currentTimeMillis(),
+                                value = (Math.round(value * 10.0) / 10.0),
+                            ),
+                        )
+                        Toast.makeText(context, s.savedShort, Toast.LENGTH_SHORT).show()
+                    },
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                ) { Text(s.save, maxLines = 1, softWrap = false) }
+            }
+        }
+        else -> Unit
     }
 }
 
@@ -417,6 +656,19 @@ private fun EmptyHint() {
         }
     }
 }
+
+/** День, когда упаковка закончится при текущей схеме; null — считать нечего. */
+fun stockRunsOut(med: Medication): Long? {
+    val stock = med.stockCount ?: return null
+    if (med.asNeeded || stock <= 0.0) return null
+    val perDay = med.dosesPerIntake * med.timesPerDay / med.everyNDays.coerceAtLeast(1)
+    if (perDay <= 0.0) return null
+    return today() + (stock / perDay).toLong()
+}
+
+/** «5 марта» — короткая дата для метки на карточке. */
+fun shortDayText(day: Long): String =
+    LocalDate.ofEpochDay(day).format(DateTimeFormatter.ofPattern("d MMMM", Lang.s.locale))
 
 /** Маленькая «таблетка»-метка с фактом о лекарстве; переносится строкой во FlowRow. */
 @Composable
@@ -480,7 +732,14 @@ private fun MedCard(
     val pills = buildList {
         add(listOf(row.med.form, row.med.doseInfo).filter { it.isNotBlank() }.joinToString(" "))
         add(s.perIntake(formatAmount(row.med.dosesPerIntake, row.med.form)))
-        row.med.stockCount?.let { add(s.stockLeft(if (it % 1.0 == 0.0) it.toInt().toString() else it.toString())) }
+        if (row.med.byClock) {
+            add(s.byClockShort + " " + row.med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) })
+        }
+        row.med.stockCount?.let { stock ->
+            add(s.stockLeft(if (stock % 1.0 == 0.0) stock.toInt().toString() else stock.toString()))
+            // Прогноз «на сколько хватит» полезнее голого остатка.
+            stockRunsOut(row.med)?.let { day -> add(s.stockUntil(shortDayText(day))) }
+        }
         if (!compact) {
             add(
                 when {

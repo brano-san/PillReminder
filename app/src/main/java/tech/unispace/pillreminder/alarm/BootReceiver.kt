@@ -16,7 +16,11 @@ class BootReceiver : BroadcastReceiver() {
         val app = context.applicationContext
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                app.container.planner.rescheduleAlarms()
+                if (intent.action == Intent.ACTION_TIMEZONE_CHANGED || intent.action == Intent.ACTION_TIME_CHANGED) {
+                    app.container.planner.resyncAfterTimeChange()
+                } else {
+                    app.container.planner.rescheduleAlarms()
+                }
                 VisitAlarms.reschedule(app, app.container.db)
                 TrackerAlarms.reschedule(app, app.container.db)
             } finally {

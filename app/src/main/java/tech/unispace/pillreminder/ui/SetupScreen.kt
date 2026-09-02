@@ -20,6 +20,10 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -41,6 +45,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.Language
@@ -54,6 +59,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -67,6 +73,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -89,6 +96,7 @@ import tech.unispace.pillreminder.alarm.AlarmScheduler
 import tech.unispace.pillreminder.alarm.Notifications
 import tech.unispace.pillreminder.alarm.VISIT_OFFSET_PRESETS
 import tech.unispace.pillreminder.widget.PillWidgetProvider
+import tech.unispace.pillreminder.widget.PillWidgetWideProvider
 import tech.unispace.pillreminder.data.Settings as AppSettings
 import java.time.LocalTime
 
@@ -234,10 +242,31 @@ fun SettingsMenuScreen(
                 }
                 Spacer(Modifier.height(10.dp))
                 val manager = AppWidgetManager.getInstance(context)
+                var pickWidget by remember { mutableStateOf(false) }
+                if (pickWidget) {
+                    // Вариантов виджета два — даём выбрать, какой закрепить.
+                    AlertDialog(
+                        onDismissRequest = { pickWidget = false },
+                        title = { Text(s.pickWidgetTitle) },
+                        text = null,
+                        confirmButton = {
+                            TextButton(onClick = {
+                                pickWidget = false
+                                manager.requestPinAppWidget(ComponentName(context, PillWidgetWideProvider::class.java), null, null)
+                            }) { Text(s.widgetWideName) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                pickWidget = false
+                                manager.requestPinAppWidget(ComponentName(context, PillWidgetProvider::class.java), null, null)
+                            }) { Text(s.widgetNarrowName) }
+                        },
+                    )
+                }
                 if (manager.isRequestPinAppWidgetSupported) {
                     FilledTonalButton(
                         onClick = {
-                            manager.requestPinAppWidget(ComponentName(context, PillWidgetProvider::class.java), null, null)
+                            pickWidget = true
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(s.widgetAdd) }
@@ -276,12 +305,40 @@ fun SettingsMenuScreen(
                 ""
             }
         }
+        // История версий спрятана под нажатием на версию — отдельного пункта меню она не стоит.
+        var showChangelog by remember { mutableStateOf(false) }
+        if (showChangelog) {
+            AlertDialog(
+                onDismissRequest = { showChangelog = false },
+                title = { Text(s.changelogTitle) },
+                text = {
+                    Column(
+                        Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CHANGELOG.forEach { release ->
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    release.version + " · " + release.date.ifBlank { s.versionUnreleased },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                (if (Lang.code == "en") release.en else release.ru).forEach { line ->
+                                    Text("• " + line, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showChangelog = false }) { Text(s.done) } },
+            )
+        }
         Text(
             s.versionLabel(versionName),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().clickable { showChangelog = true },
         )
         Spacer(Modifier.height(24.dp))
     }
@@ -396,6 +453,7 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                             )
                         }
                     }
+                    Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = repeatIntervalText,
                         onValueChange = { raw ->
@@ -439,18 +497,25 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
         // «Отложить» в уведомлении
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                var snooze by remember { mutableIntStateOf(settings.snoozeMinutes) }
-                Text(s.snoozeSettingTitle, fontWeight = FontWeight.SemiBold)
+                var snoozeSet by remember { mutableStateOf(settings.snoozeOptions.toSet()) }
+                Text(s.snoozeOptionsTitle, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                Text(s.snoozeOptionsBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(15, 30, 60).forEach { m ->
+                    listOf(5, 10, 15, 30, 60, 120).forEach { m ->
                         FilterChip(
-                            selected = snooze == m,
+                            selected = m in snoozeSet,
                             onClick = {
-                                snooze = m
-                                settings.snoozeMinutes = m
+                                val next = if (m in snoozeSet) snoozeSet - m else snoozeSet + m
+                                // Хотя бы один вариант нужен: иначе кнопке «Отложить» нечего показать.
+                                if (next.isNotEmpty()) {
+                                    snoozeSet = next
+                                    settings.snoozeOptions = next.toList()
+                                    settings.snoozeMinutes = next.min()
+                                }
                             },
-                            label = { Text(m.toString()) },
+                            label = { Text(s.duration(m), maxLines = 1, softWrap = false) },
                         )
                     }
                 }
@@ -591,6 +656,20 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (fsiAllowed) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        if (fsiAllowed) s.overlayOk else s.fsPermWarn,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
                 SwitchRow(s.fullScreenTitle, s.fullScreenBody, fullScreenAlarm) {
                     fullScreenAlarm = it
                     settings.fullScreenAlarm = it
@@ -610,17 +689,31 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(s.allowFullScreen) }
+                Spacer(Modifier.height(8.dp))
                     Text(s.fsi14Note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
             }
         }
 
         if (fullScreenAlarm) {
+            // Оформление как в чек-листе доставки: сразу видно, выдано разрешение или нет.
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Text(s.overlayTitle, fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (overlayAllowed) Icons.Default.CheckCircle else Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = if (overlayAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(s.overlayTitle, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    }
                     Spacer(Modifier.height(6.dp))
-                    Text(s.overlayBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        if (overlayAllowed) s.overlayBody else s.overlayMissing,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (overlayAllowed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                    )
                     Spacer(Modifier.height(10.dp))
                     if (overlayAllowed) {
                         Text(s.overlayOk, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
@@ -646,7 +739,7 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 FilledTonalButton(
                     onClick = {
-                        AlarmScheduler(context).scheduleTest(10_000)
+                        AlarmScheduler(context).scheduleTest(3_000)
                         say(s.testScheduled)
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -657,13 +750,13 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                         if (!canUseFullScreenIntent(context)) {
                             say(s.fsPermWarn)
                         } else {
-                            AlarmScheduler(context).scheduleTest(10_000, fullScreen = true)
+                            AlarmScheduler(context).scheduleTest(3_000, fullScreen = true)
                             say(s.testFsScheduled)
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(s.testFullScreen) }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(s.fsLockHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
                 // Прямой запуск экрана — чтобы отделить «не открывается система» от «сломан экран».
@@ -691,6 +784,10 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     val context = LocalContext.current
     val settings = remember { AppSettings(context) }
     var selected by remember { mutableStateOf(settings.visitOffsetsMinutes) }
+    // Свои смещения живут отдельно от галочек: снятая галочка не должна стирать время.
+    var custom by remember { mutableStateOf(settings.visitOffsetsCustom) }
+    // Пресеты тоже можно скрыть: кому-то не нужны «за неделю» и «за 3 дня».
+    var hidden by remember { mutableStateOf(settings.visitOffsetsHidden) }
     val snackbars = remember { SnackbarHostState() }
 
     fun apply(newSet: Set<Int>) {
@@ -700,7 +797,9 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     }
 
     // Пресеты + всё, что пользователь добавлял сам.
-    val options = (VISIT_OFFSET_PRESETS + selected).distinct().sortedDescending()
+    val options = (VISIT_OFFSET_PRESETS + custom + selected).distinct()
+        .filter { it !in hidden || it in selected }
+        .sortedDescending()
 
     SettingsSubScreen(s.visitRemindersTitle, onBack, snackbars) {
         Text(s.visitRemindersBody, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -718,29 +817,114 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                             checked = offset in selected,
                             onCheckedChange = { checked -> apply(if (checked) selected + offset else selected - offset) },
                         )
-                        Text(s.visitOffsetLabel(offset))
+                        Text(s.visitOffsetLabel(offset), modifier = Modifier.weight(1f))
+                        // Убрать можно любую строку: своё время удаляется совсем, пресет — прячется.
+                        IconButton(onClick = {
+                            if (offset in custom) {
+                                custom = custom - offset
+                                settings.visitOffsetsCustom = custom
+                            }
+                            if (offset in VISIT_OFFSET_PRESETS) {
+                                hidden = hidden + offset
+                                settings.visitOffsetsHidden = hidden
+                            }
+                            apply(selected - offset)
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = s.delete)
+                        }
                     }
                 }
             }
         }
         var showCustomPicker by remember { mutableStateOf(false) }
         if (showCustomPicker) {
-            TimeWheelDialog(
-                initial = LocalTime.of(2, 0),
-                onPick = { t ->
-                    val minutes = t.hour * 60 + t.minute
-                    if (minutes > 0) apply(selected + minutes)
+            // Дни + часы, а не циферблат: напомнить могут и за трое суток.
+            var daysText by remember { mutableStateOf("0") }
+            var hoursText by remember { mutableStateOf("2") }
+            val minutes = ((daysText.toIntOrNull() ?: 0) * 24 + (hoursText.toIntOrNull() ?: 0)) * 60
+            AlertDialog(
+                onDismissRequest = { showCustomPicker = false },
+                title = { Text(s.visitCustomTitle) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedTextField(
+                                value = daysText,
+                                onValueChange = { daysText = it.filter { c -> c.isDigit() }.take(3) },
+                                label = { Text(s.daysField) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                colors = fieldColors(),
+                                modifier = Modifier.weight(1f),
+                            )
+                            OutlinedTextField(
+                                value = hoursText,
+                                onValueChange = { hoursText = it.filter { c -> c.isDigit() }.take(2) },
+                                label = { Text(s.hoursField) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                colors = fieldColors(),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        if (minutes > 0) {
+                            Text(s.visitOffsetLabel(minutes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 },
-                onDismiss = { showCustomPicker = false },
+                confirmButton = {
+                    TextButton(
+                        enabled = minutes > 0,
+                        onClick = {
+                            custom = custom + minutes
+                            settings.visitOffsetsCustom = custom
+                            apply(selected + minutes)
+                            showCustomPicker = false
+                        },
+                    ) { Text(s.addBtn) }
+                },
+                dismissButton = { TextButton(onClick = { showCustomPicker = false }) { Text(s.cancel) } },
             )
         }
         OutlinedButton(onClick = { showCustomPicker = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(s.customOffsetTime, maxLines = 1, softWrap = false)
+            Text(s.visitCustomAdd, maxLines = 1, softWrap = false)
         }
     }
 }
 
 // ---------- Конфиденциальность ----------
+
+/**
+ * Системный запрос отпечатка или кода устройства. Если экран открыт не из активити
+ * (теоретически невозможно, но проверка дешёвая) — действие выполняется без запроса.
+ */
+fun promptDeviceLock(context: Context, onSuccess: () -> Unit) {
+    val activity = context as? FragmentActivity ?: return onSuccess()
+    val prompt = BiometricPrompt(
+        activity,
+        ContextCompat.getMainExecutor(activity),
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                onSuccess()
+            }
+        },
+    )
+    prompt.authenticate(
+        BiometricPrompt.PromptInfo.Builder()
+            .setTitle(Lang.s.lockPrompt)
+            .setAllowedAuthenticators(
+                BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+            )
+            .build(),
+    )
+}
+
+/** Есть ли на устройстве отпечаток или код блокировки — без них замок включать нельзя. */
+fun deviceLockAvailable(context: Context): Boolean =
+    BiometricManager.from(context).canAuthenticate(
+        BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+    ) == BiometricManager.BIOMETRIC_SUCCESS
+
 
 @Composable
 fun PrivacySettingsScreen(onBack: () -> Unit) {
@@ -748,7 +932,10 @@ fun PrivacySettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val settings = remember { AppSettings(context) }
     var private by remember { mutableStateOf(settings.privateNotifications) }
+    var appLock by remember { mutableStateOf(settings.appLockEnabled) }
+    val canLock = remember { deviceLockAvailable(context) }
     val snackbars = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     SettingsSubScreen(s.privacyCard, onBack, snackbars) {
         Card(Modifier.fillMaxWidth()) {
@@ -756,6 +943,26 @@ fun PrivacySettingsScreen(onBack: () -> Unit) {
                 SwitchRow(s.privacyTitle, s.privacyBody, private) {
                     private = it
                     settings.privateNotifications = it
+                }
+            }
+        }
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                SwitchRow(s.lockTitle, s.lockBody, appLock) { on ->
+                    // Без настроенного замка включать нечего — иначе приложение станет недоступным.
+                    if (on && !canLock) {
+                        scope.launch { snackbars.showSnackbar(s.lockUnavailable) }
+                    } else {
+                        // Проверяем палец сразу: и наглядно при включении, и защита от чужих рук при выключении.
+                        promptDeviceLock(context) {
+                            appLock = on
+                            settings.appLockEnabled = on
+                        }
+                    }
+                }
+                if (!canLock) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(s.lockUnavailable, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -790,7 +997,7 @@ fun StockSettingsScreen(onBack: () -> Unit) {
                     colors = fieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(s.stockSupport, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -806,9 +1013,37 @@ fun ChartSettingsScreen(onBack: () -> Unit) {
     val settings = remember { AppSettings(context) }
     var miniText by remember { mutableStateOf(settings.miniTrackerPoints.toString()) }
     var compact by remember { mutableStateOf(settings.homeCompact) }
+    var homeActions by remember { mutableStateOf(settings.showHomeActions) }
+    var smooth by remember { mutableStateOf(settings.chartSmooth) }
     val snackbars = remember { SnackbarHostState() }
 
     SettingsSubScreen(s.appearanceCard, onBack, snackbars) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text(s.chartStyleTitle, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(s.chartStyleBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = smooth,
+                        onClick = { smooth = true; settings.chartSmooth = true },
+                        label = { Text(s.chartSmooth, maxLines = 1, softWrap = false) },
+                    )
+                    FilterChip(
+                        selected = !smooth,
+                        onClick = { smooth = false; settings.chartSmooth = false },
+                        label = { Text(s.chartSharp, maxLines = 1, softWrap = false) },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                SwitchRow(s.homeActionsTitle, s.homeActionsBody, homeActions) {
+                    homeActions = it
+                    settings.showHomeActions = it
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text(s.homeModeLabel, fontWeight = FontWeight.SemiBold)
@@ -913,6 +1148,8 @@ fun DeliverySettingsScreen(onBack: () -> Unit) {
                     s.notifWord.takeIf { !notificationsEnabled(context) },
                     s.alarmsWord.takeIf { !exactAlarmsAllowed(context) },
                     s.batteryWord.takeIf { !isBatteryUnrestricted(context) },
+                    // «Не беспокоить» тоже в списке: без него будильник молчит в тихом режиме.
+                    s.dndWord.takeIf { !hasDndAccess(context) },
                 )
                 say(if (left.isEmpty()) s.allAllowed else s.remaining(left.joinToString(", ")))
             },

@@ -11,6 +11,26 @@ class Settings(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences("reminder_settings", Context.MODE_PRIVATE)
 
+    /**
+     * Состояние самого устройства, а не пользователя: этот файл исключён из облачного
+     * бэкапа (res/xml/backup_rules.xml), поэтому после переустановки гайд снова показывается.
+     */
+    private val localPrefs = context.applicationContext
+        .getSharedPreferences("local_state", Context.MODE_PRIVATE)
+
+    /**
+     * true — приложение обновили поверх установленного; false — поставили заново.
+     * После восстановления из облака тоже false: restore идёт сразу за install,
+     * поэтому firstInstallTime == lastUpdateTime.
+     */
+    private val isUpdate: Boolean by lazy {
+        runCatching {
+            val app = context.applicationContext
+            val info = app.packageManager.getPackageInfo(app.packageName, 0)
+            info.lastUpdateTime > info.firstInstallTime
+        }.getOrDefault(false)
+    }
+
     /** Повторять уведомление, пока приём не отмечен. */
     var repeatEnabled: Boolean
         get() = prefs.getBoolean(KEY_REPEAT_ENABLED, true)
@@ -69,6 +89,53 @@ class Settings(context: Context) {
             visitOffsetsEver = visitOffsetsEver + value
         }
 
+    /**
+     * Свои смещения напоминаний о визите: живут отдельно от выбранных, поэтому снятая
+     * галочка не стирает добавленное время — его убирает только кнопка удаления.
+     */
+    var visitOffsetsCustom: Set<Int>
+        get() = prefs.getStringSet(KEY_VISIT_CUSTOM, null)?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
+        set(value) = prefs.edit().putStringSet(KEY_VISIT_CUSTOM, value.map { it.toString() }.toSet()).apply()
+
+    /** Варианты кнопки «Отложить» на полноэкранном напоминании, минуты. */
+    var snoozeOptions: List<Int>
+        get() = (prefs.getString(KEY_SNOOZE_OPTIONS, null) ?: "")
+            .split(',').mapNotNull { it.trim().toIntOrNull() }.filter { it in 1..720 }.distinct().sorted()
+            .ifEmpty { listOf(10, 30, 60) }
+        set(value) = prefs.edit()
+            .putString(KEY_SNOOZE_OPTIONS, value.filter { it in 1..720 }.distinct().sorted().joinToString(","))
+            .apply()
+
+    /** Пресетные смещения напоминаний о визите, которые пользователь убрал из списка. */
+    var visitOffsetsHidden: Set<Int>
+        get() = prefs.getStringSet(KEY_VISIT_HIDDEN, null)?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
+        set(value) = prefs.edit().putStringSet(KEY_VISIT_HIDDEN, value.map { it.toString() }.toSet()).apply()
+
+    /** Момент нажатия «Ложусь спать»; 0 — кнопку не нажимали. */
+    var pendingSleepStart: Long
+        get() = prefs.getLong(KEY_SLEEP_START, 0L)
+        set(value) = prefs.edit().putLong(KEY_SLEEP_START, value).apply()
+
+    /** Спрашивать оценку сна при нажатии «Я проснулся». */
+    var askSleepOnWake: Boolean
+        get() = prefs.getBoolean(KEY_ASK_SLEEP, true)
+        set(value) = prefs.edit().putBoolean(KEY_ASK_SLEEP, value).apply()
+
+    /** День (epochDay цикла), про который уже сказали «всё выпито»; -1 — ещё не говорили. */
+    var dayDoneNotifiedFor: Long
+        get() = prefs.getLong(KEY_DAY_DONE, -1L)
+        set(value) = prefs.edit().putLong(KEY_DAY_DONE, value).apply()
+
+    /** Просить отпечаток или код устройства при открытии приложения. */
+    var appLockEnabled: Boolean
+        get() = prefs.getBoolean(KEY_APP_LOCK, false)
+        set(value) = prefs.edit().putBoolean(KEY_APP_LOCK, value).apply()
+
+    /** Показывать на главной ряд кнопок «Советы · Туториал · Отчёт · Сон · Еда». */
+    var showHomeActions: Boolean
+        get() = prefs.getBoolean(KEY_HOME_ACTIONS, true)
+        set(value) = prefs.edit().putBoolean(KEY_HOME_ACTIONS, value).apply()
+
     /** Не показывать названия таблеток в уведомлениях. */
     var privateNotifications: Boolean
         get() = prefs.getBoolean(KEY_PRIVATE, false)
@@ -88,6 +155,11 @@ class Settings(context: Context) {
     var wakeReminderMinutes: Int
         get() = prefs.getInt(KEY_WAKE_REMIND_AT, 600)
         set(value) = prefs.edit().putInt(KEY_WAKE_REMIND_AT, value.coerceIn(0, 24 * 60 - 1)).apply()
+
+    /** Сглаженная линия на графиках вместо ломаной. */
+    var chartSmooth: Boolean
+        get() = prefs.getBoolean(KEY_CHART_SMOOTH, true)
+        set(value) = prefs.edit().putBoolean(KEY_CHART_SMOOTH, value).apply()
 
     /** Сколько последних записей показывать на мини-графике трекера. */
     var miniTrackerPoints: Int
@@ -116,8 +188,12 @@ class Settings(context: Context) {
 
     /** Туториал уже показан при первом запуске. */
     var tutorialSeen: Boolean
-        get() = prefs.getBoolean(KEY_TUTORIAL_SEEN, false)
-        set(value) = prefs.edit().putBoolean(KEY_TUTORIAL_SEEN, value).apply()
+        // Старое значение из основного файла подхватываем один раз, чтобы после обновления
+        // приложения гайд не показался тем, кто его уже прошёл.
+        // Старое значение подхватываем ТОЛЬКО при обновлении: на чистой установке
+        // reminder_settings.xml мог приехать из облачного бэкапа, и гайд бы не показался.
+        get() = localPrefs.getBoolean(KEY_TUTORIAL_SEEN, isUpdate && prefs.getBoolean(KEY_TUTORIAL_SEEN, false))
+        set(value) = localPrefs.edit().putBoolean(KEY_TUTORIAL_SEEN, value).apply()
 
     /**
      * Все смещения напоминаний о визитах, которые когда-либо включались — чтобы при
@@ -153,6 +229,15 @@ class Settings(context: Context) {
         const val KEY_SOUND_URI = "sound_uri"
         const val KEY_CHANNEL_VERSION = "channel_version"
         const val KEY_VISIT_OFFSETS = "visit_offsets"
+        const val KEY_VISIT_CUSTOM = "visit_offsets_custom"
+        const val KEY_VISIT_HIDDEN = "visit_offsets_hidden"
+        const val KEY_CHART_SMOOTH = "chart_smooth"
+        const val KEY_APP_LOCK = "app_lock"
+        const val KEY_HOME_ACTIONS = "home_actions"
+        const val KEY_SLEEP_START = "pending_sleep_start"
+        const val KEY_ASK_SLEEP = "ask_sleep_on_wake"
+        const val KEY_DAY_DONE = "day_done_notified_for"
+        const val KEY_SNOOZE_OPTIONS = "snooze_options"
         const val KEY_REPEAT_ENABLED = "repeat_enabled"
         const val KEY_REPEAT_INTERVAL = "repeat_interval"
         const val KEY_REPEAT_COUNT = "repeat_count"

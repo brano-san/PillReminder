@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.container
 import tech.unispace.pillreminder.data.AppDatabase
+import tech.unispace.pillreminder.data.CYCLE_MAX_MS
 import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.data.today
 import tech.unispace.pillreminder.ui.Lang
@@ -24,6 +25,12 @@ import java.time.ZoneId
  * приложению нельзя (нужен спецдоступ Usage Access), поэтому — время.
  */
 object WakeReminder {
+
+    /** День уже идёт? Цикл живёт до CYCLE_MAX_MS с момента пробуждения, а не до полуночи. */
+    suspend fun cycleActive(db: AppDatabase): Boolean {
+        val last = db.wakeDao().latest() ?: return false
+        return System.currentTimeMillis() - last.wakeAt in 0 until CYCLE_MAX_MS
+    }
 
     private fun intent(context: Context): PendingIntent =
         PendingIntent.getBroadcast(
@@ -43,11 +50,11 @@ object WakeReminder {
         if (!settings.wakeReminderEnabled) return
 
         val db = AppDatabase.get(context)
-        val wakePressedToday = db.wakeDao().getDay(today()) != null
+        val dayStarted = cycleActive(db)
         val time = LocalTime.of(settings.wakeReminderMinutes / 60, settings.wakeReminderMinutes % 60)
         val zone = ZoneId.systemDefault()
         val todayAt = LocalDate.now().atTime(time).atZone(zone).toInstant().toEpochMilli()
-        val at = if (!wakePressedToday && todayAt > System.currentTimeMillis()) {
+        val at = if (!dayStarted && todayAt > System.currentTimeMillis()) {
             todayAt
         } else {
             LocalDate.now().plusDays(1).atTime(time).atZone(zone).toInstant().toEpochMilli()
@@ -68,7 +75,7 @@ class WakeReminderReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = app.container.db
-                if (db.wakeDao().getDay(today()) == null) {
+                if (!WakeReminder.cycleActive(db)) {
                     Notifications.show(
                         context = app,
                         doseId = WAKE_NOTIF_ID,

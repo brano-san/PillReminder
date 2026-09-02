@@ -22,9 +22,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -55,6 +58,9 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         Icons.AutoMirrored.Filled.Notes,
         Icons.AutoMirrored.Filled.TrendingUp,
         Icons.Default.History,
+        Icons.Default.Schedule,
+        Icons.Default.AutoAwesome,
+        Icons.Default.Bedtime,
     )
     val pager = rememberPagerState(pageCount = { slides.size })
     val scope = rememberCoroutineScope()

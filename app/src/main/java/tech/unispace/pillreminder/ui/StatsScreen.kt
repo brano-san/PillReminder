@@ -28,6 +28,18 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material3.Checkbox
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +69,7 @@ import java.time.format.TextStyle
 /** История: журнал по дням и тепловая карта. Вкладки листаются свайпом. */
 @Composable
 fun StatsScreen(
+    adherence: AdherenceState,
     journal: JournalState,
     heatmap: HeatmapState,
     onSelectDay: (Long) -> Unit,
@@ -81,7 +94,7 @@ fun StatsScreen(
         }
         HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
             when (page) {
-                0 -> JournalTab(journal, onSelectDay, onUndo, contentPadding)
+                0 -> JournalTab(adherence, journal, onSelectDay, onUndo, contentPadding)
                 else -> HeatmapTab(
                     heatmap,
                     onMonthShift,
@@ -98,31 +111,78 @@ fun StatsScreen(
 
 @Composable
 private fun JournalTab(
+    adherence: AdherenceState,
     state: JournalState,
     onSelectDay: (Long) -> Unit,
     onUndo: (Long) -> Unit,
     contentPadding: PaddingValues,
 ) {
+    // Фильтры журнала: приёмы, еда и сон можно скрывать по отдельности.
+    var showDoses by rememberSaveable { mutableStateOf(true) }
+    var showMeals by rememberSaveable { mutableStateOf(true) }
+    var showSleep by rememberSaveable { mutableStateOf(true) }
+
+    val events = remember(state, showDoses, showMeals, showSleep) {
+        buildList {
+            if (showDoses) state.doses.forEach { add(JournalEvent.Intake(it)) }
+            if (showSleep) {
+                state.wakeAt?.let { add(JournalEvent.Mark(it, MarkKind.WAKE)) }
+                state.bedAt?.let { add(JournalEvent.Mark(it, MarkKind.BED)) }
+            }
+            if (showMeals) state.meals.forEach { add(JournalEvent.Mark(it, MarkKind.MEAL)) }
+        }.sortedByDescending { it.at }
+    }
+
     Column(Modifier.fillMaxSize()) {
         WeekStrip(selected = state.day, onSelectDay = onSelectDay)
+        // Фильтры прячем под иконку: лента дня важнее, чем ряд чекбоксов.
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp), contentAlignment = Alignment.CenterEnd) {
+            var filterMenu by remember { mutableStateOf(false) }
+            val allShown = showDoses && showMeals && showSleep
+            IconButton(onClick = { filterMenu = true }, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.FilterList,
+                    contentDescription = Lang.s.journalFilters,
+                    tint = if (allShown) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            DropdownMenu(expanded = filterMenu, onDismissRequest = { filterMenu = false }) {
+                FilterMenuItem(Lang.s.filterDoses, showDoses) { showDoses = it }
+                FilterMenuItem(Lang.s.filterMeals, showMeals) { showMeals = it }
+                FilterMenuItem(Lang.s.filterSleep, showSleep) { showSleep = it }
+            }
+        }
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item(key = "wake") {
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.WbSunny, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.width(12.dp))
+            item(key = "adherence") {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (state.wakeAt != null) Lang.s.wakeAtLabel(formatClock(state.wakeAt)) else Lang.s.wakeNotMarked,
-                            fontWeight = FontWeight.SemiBold,
+                            Lang.s.streakTitle,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f),
                         )
+                        Text(Lang.s.streakDays(adherence.streak), fontWeight = FontWeight.SemiBold)
+                    }
+                    if (adherence.perMed.isNotEmpty()) {
+                        Text(Lang.s.adherenceTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                        adherence.perMed.forEach { (medName, percent) ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(medName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, modifier = Modifier.weight(1f))
+                                Text("" + percent + "%", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                 }
             }
-            if (state.doses.isEmpty()) {
+        }
+            if (events.isEmpty()) {
                 item(key = "empty") {
                     Text(
                         Lang.s.noIntakes,
@@ -132,7 +192,13 @@ private fun JournalTab(
                     )
                 }
             }
-            items(state.doses, key = { it.id }) { dose -> DoseRow(dose, onUndo) }
+            // Всё вперемешку, но по времени: видно, что за чем шло в этот день.
+            items(events, key = { it.key }) { event ->
+                when (event) {
+                    is JournalEvent.Intake -> DoseRow(event.dose, onUndo)
+                    is JournalEvent.Mark -> MarkRow(event)
+                }
+            }
         }
     }
 }
@@ -182,6 +248,48 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = Lang.s.weekNext)
         }
     }
+}
+
+/** Что показывает журнал дня: приём таблетки или отметка (подъём, отход ко сну, еда). */
+private enum class MarkKind { WAKE, BED, MEAL }
+
+private sealed class JournalEvent(val at: Long, val key: String) {
+    class Intake(val dose: Dose) : JournalEvent(dose.takenAt ?: dose.plannedAt, "dose-" + dose.id)
+    class Mark(at: Long, val kind: MarkKind) : JournalEvent(at, "mark-" + kind.name + "-" + at)
+}
+
+/** Отметка дня строкой: иконка, что случилось и во сколько. */
+@Composable
+private fun MarkRow(event: JournalEvent.Mark) {
+    val s = Lang.s
+    val (icon, label) = when (event.kind) {
+        MarkKind.WAKE -> Icons.Default.WbSunny to s.eventWokeUp
+        MarkKind.BED -> Icons.Default.Bedtime to s.eventBed
+        MarkKind.MEAL -> Icons.Default.Restaurant to s.eventMeal
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(12.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(formatClock(event.at), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Пункт меню фильтров: чекбокс с подписью. */
+@Composable
+private fun FilterMenuItem(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = checked, onCheckedChange = null)
+                Spacer(Modifier.width(8.dp))
+                Text(label, maxLines = 1, softWrap = false)
+            }
+        },
+        onClick = { onChange(!checked) },
+    )
 }
 
 @Composable
@@ -312,14 +420,16 @@ private fun HeatCell(
 ) {
     val hasData = !isFuture && heat != null && heat.planned > 0
     val ratio = if (hasData) heat!!.taken.toFloat() / heat.planned else 0f
+    // Зелёный — день закрыт полностью, оранжевый — были пропуски, красный — не выпито ничего.
     val background = when {
         !hasData -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ratio == 0f -> Color(0xFFE53935).copy(alpha = 0.55f)
-        else -> Color(0xFF2E7D32).copy(alpha = 0.25f + 0.75f * ratio)
+        ratio >= 1f -> Color(0xFF2E7D32).copy(alpha = 0.85f)
+        else -> Color(0xFFEF6C00).copy(alpha = 0.35f + 0.45f * ratio)
     }
     val textColor = when {
         !hasData -> MaterialTheme.colorScheme.onSurface
-        ratio >= 0.5f -> Color.White
+        ratio >= 0.5f || ratio == 0f -> Color.White
         else -> Color(0xFF1B1B1B)
     }
     val cellModifier = modifier

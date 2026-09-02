@@ -11,7 +11,7 @@ import java.time.LocalDate
  */
 object Backup {
 
-    const val JSON_VERSION = 1
+    const val JSON_VERSION = 2
 
     suspend fun exportJson(db: AppDatabase): String {
         val root = JSONObject()
@@ -41,7 +41,12 @@ object Backup {
                             .put("durationDays", m.durationDays)
                             .put("linkedToMedId", m.linkedToMedId ?: JSONObject.NULL)
                             .put("linkedDelayMinutes", m.linkedDelayMinutes)
-                            .put("stockCount", m.stockCount ?: JSONObject.NULL),
+                            .put("stockCount", m.stockCount ?: JSONObject.NULL)
+                            .put("fixedTimes", m.fixedTimes)
+                            .put("afterMealMinutes", m.afterMealMinutes)
+                            .put("apartFromOthersMinutes", m.apartFromOthersMinutes)
+                            .put("apartFromMedIds", m.apartFromMedIds)
+                            .put("beforeMealMinutes", m.beforeMealMinutes),
                     )
                 }
             },
@@ -56,7 +61,7 @@ object Backup {
                             .put("medId", d.medId)
                             .put("dayEpochDay", d.dayEpochDay)
                             .put("indexInDay", d.indexInDay)
-                            .put("plannedAt", d.plannedAt)
+                            .put("plannedAt", d.plannedAt).put("baseAt", d.baseAt ?: JSONObject.NULL)
                             .put("status", d.status.name)
                             .put("takenAt", d.takenAt ?: JSONObject.NULL)
                             .put("amount", d.amount)
@@ -75,7 +80,8 @@ object Backup {
                             .put("title", n.title)
                             .put("description", n.description)
                             .put("body", n.body)
-                            .put("atMillis", n.atMillis),
+                            .put("atMillis", n.atMillis)
+                            .put("tags", n.tags),
                     )
                 }
             },
@@ -106,7 +112,9 @@ object Backup {
                             .put("endEpochDay", e.endEpochDay ?: JSONObject.NULL)
                             .put("effect", e.effect)
                             .put("feeling", e.feeling)
-                            .put("photoUri", e.photoUri ?: JSONObject.NULL),
+                            .put("photoUri", e.photoUri ?: JSONObject.NULL)
+                            .put("form", e.form)
+                            .put("doseInfo", e.doseInfo),
                     )
                 }
             },
@@ -131,6 +139,13 @@ object Backup {
         )
 
         root.put(
+            "meals",
+            JSONArray().apply {
+                db.mealDao().getAll().forEach { m -> put(JSONObject().put("atMillis", m.atMillis)) }
+            },
+        )
+
+        root.put(
             "trackerEntries",
             JSONArray().apply {
                 trackerEntriesAll(db).forEach { e ->
@@ -143,7 +158,9 @@ object Backup {
                             .put("sleepStart", e.sleepStart ?: JSONObject.NULL)
                             .put("sleepEnd", e.sleepEnd ?: JSONObject.NULL)
                             .put("awakenings", e.awakenings)
-                            .put("tags", e.tags),
+                            .put("tags", e.tags)
+                            .put("wakeValue", e.wakeValue ?: JSONObject.NULL)
+                            .put("auto", e.auto),
                     )
                 }
             },
@@ -153,7 +170,7 @@ object Backup {
             "wakeEvents",
             JSONArray().apply {
                 wakesAll(db).forEach { w ->
-                    put(JSONObject().put("dayEpochDay", w.dayEpochDay).put("wakeAt", w.wakeAt))
+                    put(JSONObject().put("dayEpochDay", w.dayEpochDay).put("wakeAt", w.wakeAt).put("bedAt", w.bedAt ?: JSONObject.NULL))
                 }
             },
         )
@@ -192,6 +209,11 @@ object Backup {
                     durationDays = o.optInt("durationDays", 0),
                     linkedDelayMinutes = o.optInt("linkedDelayMinutes", 120),
                     stockCount = if (o.isNull("stockCount")) null else o.getDouble("stockCount"),
+                    fixedTimes = o.optString("fixedTimes"),
+                    afterMealMinutes = o.optInt("afterMealMinutes", 0),
+                    apartFromOthersMinutes = o.optInt("apartFromOthersMinutes", 0),
+                    beforeMealMinutes = o.optInt("beforeMealMinutes", 0),
+                    apartFromMedIds = o.optString("apartFromMedIds"),
                 ),
             )
             medIdMap[o.getLong("id")] = newId
@@ -217,6 +239,7 @@ object Backup {
                     dayEpochDay = o.getLong("dayEpochDay"),
                     indexInDay = o.optInt("indexInDay", 0),
                     plannedAt = o.getLong("plannedAt"),
+                    baseAt = if (o.isNull("baseAt")) null else o.getLong("baseAt"),
                     status = DoseStatus.valueOf(o.optString("status", "PENDING")),
                     takenAt = if (o.isNull("takenAt")) null else o.getLong("takenAt"),
                     amount = o.optDouble("amount", 1.0),
@@ -234,6 +257,7 @@ object Backup {
                     description = o.optString("description"),
                     body = o.optString("body"),
                     atMillis = o.getLong("atMillis"),
+                    tags = o.optString("tags"),
                 ),
             )
         }
@@ -261,6 +285,8 @@ object Backup {
                     effect = o.optString("effect"),
                     feeling = o.optString("feeling"),
                     photoUri = if (o.isNull("photoUri")) null else o.getString("photoUri"),
+                    form = o.optString("form"),
+                    doseInfo = o.optString("doseInfo"),
                 ),
             )
         }
@@ -282,6 +308,11 @@ object Backup {
             trackerIdMap[o.getLong("id")] = newId
         }
 
+        val mealsArr = root.optJSONArray("meals") ?: JSONArray()
+        for (i in 0 until mealsArr.length()) {
+            db.mealDao().insert(MealEvent(atMillis = mealsArr.getJSONObject(i).getLong("atMillis")))
+        }
+
         val entriesArr = root.optJSONArray("trackerEntries") ?: JSONArray()
         for (i in 0 until entriesArr.length()) {
             val o = entriesArr.getJSONObject(i)
@@ -296,6 +327,8 @@ object Backup {
                     sleepEnd = if (o.isNull("sleepEnd")) null else o.getLong("sleepEnd"),
                     awakenings = o.optInt("awakenings", 0),
                     tags = o.optString("tags"),
+                    wakeValue = if (o.isNull("wakeValue")) null else o.getDouble("wakeValue"),
+                    auto = o.optBoolean("auto", false),
                 ),
             )
         }
@@ -303,7 +336,13 @@ object Backup {
         val wakesArr = root.optJSONArray("wakeEvents") ?: JSONArray()
         for (i in 0 until wakesArr.length()) {
             val o = wakesArr.getJSONObject(i)
-            db.wakeDao().upsert(WakeEvent(o.getLong("dayEpochDay"), o.getLong("wakeAt")))
+            db.wakeDao().upsert(
+                WakeEvent(
+                    dayEpochDay = o.getLong("dayEpochDay"),
+                    wakeAt = o.getLong("wakeAt"),
+                    bedAt = if (o.isNull("bedAt")) null else o.getLong("bedAt"),
+                ),
+            )
         }
     }
 

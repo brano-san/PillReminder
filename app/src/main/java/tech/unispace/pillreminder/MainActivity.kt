@@ -15,12 +15,29 @@ import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.fragment.app.FragmentActivity
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -41,6 +58,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import tech.unispace.pillreminder.data.Settings
+import tech.unispace.pillreminder.ui.AdherenceState
 import tech.unispace.pillreminder.ui.BackupScreen
 import tech.unispace.pillreminder.ui.ChartSettingsScreen
 import tech.unispace.pillreminder.ui.CorrelationScreen
@@ -70,7 +88,28 @@ import tech.unispace.pillreminder.ui.TrackersScreen
 import tech.unispace.pillreminder.ui.VisitReminderSettingsScreen
 import tech.unispace.pillreminder.ui.theme.PillTheme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
+
+    /** Системный запрос отпечатка или кода устройства. */
+    private fun askUnlock(onSuccess: () -> Unit) {
+        val prompt = BiometricPrompt(
+            this,
+            ContextCompat.getMainExecutor(this),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    onSuccess()
+                }
+            },
+        )
+        prompt.authenticate(
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle(Lang.s.lockPrompt)
+                .setAllowedAuthenticators(
+                    BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+                )
+                .build(),
+        )
+    }
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -83,11 +122,39 @@ class MainActivity : ComponentActivity() {
             notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
 
+        val settings = Settings(this)
         setContent {
             PillTheme {
-                AppRoot()
+                // ÐÐ°Ð»Ð¸Ð²ÐºÐ° Ð½Ð° Ð²ÑÑ Ð¾ÐºÐ½Ð¾: Ð¸Ð½Ð°ÑÐµ Ð¿ÑÐ¸ Ð¾ÑÐºÑÑÑÐ¸Ð¸ ÐºÐ»Ð°Ð²Ð¸Ð°ÑÑÑÑ Ð²Ð½Ð¸Ð·Ñ Ð²Ð¸Ð´Ð½Ð° Ð¿Ð¾Ð»Ð¾ÑÐ° ÑÐ¾Ð½Ð° Ð¾ÐºÐ½Ð°.
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    // Медицинские данные: при включённом замке экран открывается только после проверки.
+                    var unlocked by remember { mutableStateOf(!settings.appLockEnabled) }
+                    if (unlocked) {
+                        AppRoot()
+                    } else {
+                        LockScreen(onUnlock = { askUnlock { unlocked = true } })
+                        LaunchedEffect(Unit) { askUnlock { unlocked = true } }
+                    }
+                }
             }
         }
+    }
+}
+
+/** Заглушка вместо содержимого, пока приложение заблокировано. */
+@Composable
+private fun LockScreen(onUnlock: () -> Unit) {
+    val s = Lang.s
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(16.dp))
+        Text(s.lockPrompt, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(24.dp))
+        Button(onClick = onUnlock) { Text(s.lockUnlock) }
     }
 }
 
@@ -168,6 +235,7 @@ private fun AppRoot() {
             }
             composable(ROUTE_HOME) {
                 val state by vm.home.collectAsState()
+                val sleepToRate by vm.sleepToRate.collectAsState()
                 val trackerRows by vm.trackerRows.collectAsState()
                 HomeScreen(
                     state = state,
@@ -188,6 +256,13 @@ private fun AppRoot() {
                     onOpenTips = { nav.navigate(ROUTE_TIPS) },
                     onOpenTutorial = { nav.navigate(ROUTE_ONBOARDING) },
                     onOpenReport = { nav.navigate(ROUTE_SETUP_REPORT) },
+                    onBedtime = { vm.goToBed() },
+                    onMeal = { vm.recordMeal() },
+                    sleepToRate = sleepToRate,
+                    onRateSleep = { entry, sleep, wake -> vm.rateSleep(entry, sleep, wake) },
+                    onDismissSleepRating = { vm.dismissSleepRating() },
+                    onDuplicate = { vm.duplicateMed(it) },
+                    onQuickEntry = { vm.addTrackerEntry(it) },
                 )
             }
             composable(ROUTE_RECORDS) {
@@ -224,7 +299,11 @@ private fun AppRoot() {
             composable(ROUTE_STATS) {
                 val journal by vm.journal.collectAsState()
                 val heatmap by vm.heatmap.collectAsState()
+                // Дисциплина пересчитывается при каждом изменении журнала — запрос дешёвый.
+                var adherence by remember { mutableStateOf(AdherenceState()) }
+                LaunchedEffect(journal) { adherence = vm.adherence() }
                 StatsScreen(
+                    adherence = adherence,
                     journal = journal,
                     heatmap = heatmap,
                     onSelectDay = { vm.selectedDay.value = it },
@@ -275,6 +354,7 @@ private fun AppRoot() {
                     vm = vm,
                     medId = entry.arguments?.getLong("medId") ?: 0L,
                     onOpenLibrary = { nav.navigate(ROUTE_LIBRARY) },
+                    onOpenLibraryEntry = { nav.navigate("libEdit/" + it) },
                     onDone = { nav.popBackStack() },
                 )
             }

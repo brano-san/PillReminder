@@ -27,7 +27,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
@@ -39,6 +44,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -78,6 +86,7 @@ private fun ToolScreen(
     title: String,
     onBack: () -> Unit,
     snackbars: SnackbarHostState,
+    actions: @Composable RowScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     Scaffold(
@@ -89,6 +98,7 @@ private fun ToolScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = Lang.s.back)
                     }
                 },
+                actions = actions,
             )
         },
         snackbarHost = { SnackbarHost(snackbars) },
@@ -219,6 +229,17 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
 
 // ---------- Отчёт для врача ----------
 
+/** Блок экрана-инструмента: серая карточка с заголовком, как в мастере таблетки. */
+@Composable
+private fun ToolSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            content()
+        }
+    }
+}
+
 @Composable
 fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
     val s = Lang.s
@@ -260,27 +281,68 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
     val stamp = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT))
 
     ToolScreen(s.reportTitle, onBack, snackbars) {
-        Text(s.periodLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        var customPeriod by remember { mutableStateOf(false) }
+        var customDays by remember { mutableStateOf("") }
+        if (customPeriod) {
+            AlertDialog(
+                onDismissRequest = { customPeriod = false },
+                title = { Text(s.reportPeriodSection) },
+                text = {
+                    OutlinedTextField(
+                        value = customDays,
+                        onValueChange = { customDays = it.filter { c -> c.isDigit() }.take(4) },
+                        label = { Text(s.periodDaysLabel) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        colors = fieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = (customDays.toIntOrNull() ?: 0) > 0,
+                        onClick = {
+                            customDays.toIntOrNull()?.coerceIn(1, 3650)?.let { days = it }
+                            customPeriod = false
+                        },
+                    ) { Text(s.done) }
+                },
+                dismissButton = { TextButton(onClick = { customPeriod = false }) { Text(s.cancel) } },
+            )
+        }
+        ToolSection(s.reportPeriodSection) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(7, 30, 90).forEach { n ->
                 FilterChip(selected = days == n, onClick = { days = n }, label = { Text(s.periodDays(n)) })
             }
         }
+        // Свой период отдельной кнопкой: по чипу неясно, что число можно поменять.
+        OutlinedButton(
+            onClick = {
+                customDays = days.toString()
+                customPeriod = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (days in listOf(7, 30, 90)) s.periodCustomBtn else s.periodCustomSet(s.periodDays(days)),
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
 
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                Text(
-                    s.reportSections,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 8.dp, top = 6.dp),
-                )
+        }
+        ToolSection(s.reportSectionsTitle) {
+            Column {
                 listOf(
                     Report.SEC_INTAKES to s.repIntakes,
                     Report.SEC_MEDS to s.repMeds,
                     Report.SEC_TRACKERS to s.repTrackers,
                     Report.SEC_NOTES to s.repNotes,
                     Report.SEC_VISITS to s.repVisits,
+                    Report.SEC_LINKS to s.corrReportSection,
                 ).forEach { (key, label) ->
                     Row(
                         Modifier.fillMaxWidth().clickable { sections = if (key in sections) sections - key else sections + key },
@@ -293,20 +355,29 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
             }
         }
 
-        // Кнопки — переносом строки (FlowRow), чтобы длинные подписи не ломались по слогам.
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(
-                onClick = {
-                    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report)
-                    context.startActivity(Intent.createChooser(send, s.reportShare))
-                },
-            ) { Text(s.reportShare, maxLines = 1, softWrap = false) }
-            OutlinedButton(onClick = { saveTxt.launch("pills-report-$stamp.txt") }) { Text("TXT", maxLines = 1, softWrap = false) }
-            OutlinedButton(onClick = { savePdf.launch("pills-report-$stamp.pdf") }) { Text("PDF", maxLines = 1, softWrap = false) }
+        ToolSection(s.reportExportTitle) {
+        // Файлы в одну строку, отправка — отдельной строкой под ними.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { saveTxt.launch("pills-report-$stamp.txt") },
+                modifier = Modifier.weight(1f),
+            ) { Text("TXT", maxLines = 1, softWrap = false) }
+            OutlinedButton(
+                onClick = { savePdf.launch("pills-report-$stamp.pdf") },
+                modifier = Modifier.weight(1f),
+            ) { Text("PDF", maxLines = 1, softWrap = false) }
         }
+        FilledTonalButton(
+            onClick = {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report)
+                context.startActivity(Intent.createChooser(send, s.reportShare))
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(s.reportShare, maxLines = 1, softWrap = false) }
 
-        Card(Modifier.fillMaxWidth()) {
-            Text(report, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp))
+        }
+        ToolSection(s.reportPreviewTitle) {
+            Text(report, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -384,7 +455,45 @@ fun CorrelationScreen(vm: MainViewModel, onBack: () -> Unit) {
 
     val colorOf = Series.entries.withIndex().associate { (i, sr) -> sr to SERIES_COLORS[i % SERIES_COLORS.size] }
 
-    ToolScreen(s.corrTitle, onBack, snackbars) {
+    var showInfo by remember { mutableStateOf(false) }
+    if (showInfo) {
+        AlertDialog(
+            onDismissRequest = { showInfo = false },
+            title = { Text(s.corrInfoTitle) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(s.corrInfoBody, style = MaterialTheme.typography.bodyMedium)
+                    val picked = Series.entries.filter { it in selected }
+                    if (picked.isNotEmpty()) {
+                        Text(s.corrPairsTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                        // Полные названия пар — то, что убрали с экрана ради компактности.
+                        for (i in picked.indices) {
+                            for (j in i + 1 until picked.size) {
+                                val r = pearson(data[picked[i]] ?: emptyList(), data[picked[j]] ?: emptyList())
+                                Text(
+                                    "${i + 1}×${j + 1}  " + seriesLabel(picked[i], s) + " × " + seriesLabel(picked[j], s) + ": " +
+                                        (r?.let { String.format(Locale.ROOT, "r = %.2f", it) } ?: s.corrNotEnough),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showInfo = false }) { Text(s.done) } },
+        )
+    }
+
+    ToolScreen(
+        s.corrTitle,
+        onBack,
+        snackbars,
+        actions = {
+            IconButton(onClick = { showInfo = true }) {
+                Icon(Icons.Outlined.Info, contentDescription = s.corrInfoTitle)
+            }
+        },
+    ) {
         // График сверху.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -395,29 +504,44 @@ fun CorrelationScreen(vm: MainViewModel, onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(10.dp))
                 // Легенда.
+                // Легенда с номерами: по ним же читаются пары ниже — иначе текста слишком много.
+                val picked = Series.entries.filter { it in selected }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    selected.forEach { sr ->
+                    picked.forEachIndexed { i, sr ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             androidx.compose.foundation.layout.Box(Modifier.size(10.dp).background(colorOf.getValue(sr), CircleShape))
                             Spacer(Modifier.width(6.dp))
-                            Text(seriesLabel(sr, s), style = MaterialTheme.typography.labelMedium)
+                            Text("${i + 1}. " + seriesLabel(sr, s), style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
                         }
                     }
                 }
-                // Парные корреляции по всем выбранным сериям.
-                val pairs = selected.toList()
-                val lines = buildList {
-                    for (i in pairs.indices) for (j in i + 1 until pairs.size) {
-                        val r = pearson(data[pairs[i]] ?: emptyList(), data[pairs[j]] ?: emptyList())
-                        add(
-                            seriesLabel(pairs[i], s) + " × " + seriesLabel(pairs[j], s) + ": " +
-                                (r?.let { String.format(Locale.ROOT, "r = %.2f", it) } ?: s.corrNotEnough),
-                        )
+                // Парные корреляции: «1×2 0,42» вместо длинных названий.
+                val pairs = buildList {
+                    for (i in picked.indices) for (j in i + 1 until picked.size) {
+                        add(Triple(i + 1, j + 1, pearson(data[picked[i]] ?: emptyList(), data[picked[j]] ?: emptyList())))
                     }
                 }
-                if (lines.isNotEmpty()) {
+                if (pairs.isNotEmpty()) {
                     Spacer(Modifier.height(10.dp))
-                    lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold) }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        pairs.forEach { (a, b, r) ->
+                            AssistChip(
+                                onClick = {},
+                                label = {
+                                    Text(
+                                        "$a×$b  " + (r?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "—"),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    if (pairs.any { it.third == null }) {
+                        Spacer(Modifier.height(6.dp))
+                        Text("— " + s.corrNotEnough, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }

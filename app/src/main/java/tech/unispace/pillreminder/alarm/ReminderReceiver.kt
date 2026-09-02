@@ -6,6 +6,7 @@ import android.content.Intent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import tech.unispace.pillreminder.container
 import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.MINUTE_MS
@@ -69,25 +70,60 @@ class ReminderReceiver : BroadcastReceiver() {
                 } else {
                     buildString {
                         append(formatAmount(dose.amount, med.form))
-                        if (med.comment.isNotBlank()) {
+                        // Связь с едой обязана быть видна в шторке; личный комментарий — нет,
+                        // он остаётся на карточке таблетки.
+                        if (med.afterMealMinutes > 0) {
                             append(" · ")
-                            append(med.comment)
+                            append(Lang.s.mealAfterShort(Lang.s.duration(med.afterMealMinutes)))
+                        }
+                        if (med.beforeMealMinutes > 0) {
+                            append(" · ")
+                            append(Lang.s.mealBeforeShort(Lang.s.duration(med.beforeMealMinutes)))
                         }
                     }
                 }
-                Notifications.show(
-                    context = app,
-                    doseId = doseId,
-                    title = if (private) {
-                        Lang.s.timeToTakeFallback
+                // Несколько таблеток в одну минуту — одно уведомление на всех, а не стопка.
+                val batch = db.doseDao().getDay(dose.dayEpochDay)
+                    .filter { it.status == DoseStatus.PENDING && abs(it.plannedAt - dose.plannedAt) <= GROUP_WINDOW_MS }
+                    .sortedBy { it.id }
+                val leader = batch.firstOrNull() ?: dose
+                if (batch.size > 1 && leader.id != doseId) {
+                    // Уведомление и цепочку повторов ведёт «старший» приём группы.
+                    return@launch
+                }
+
+                if (batch.size > 1) {
+                    val names = if (private) {
+                        ""
                     } else {
-                        Lang.s.timeToTake(med.name)
-                    },
-                    text = text,
-                    useAlarmChannel = settings.alarmSound,
-                    attempt = attempt,
-                    fullScreen = settings.fullScreenAlarm,
-                )
+                        batch.joinToString("\n") { d ->
+                            d.medNameSnapshot + " · " + formatAmount(d.amount, med.form)
+                        }
+                    }
+                    Notifications.showGroup(
+                        context = app,
+                        doses = batch,
+                        title = Lang.s.groupNotifTitle(batch.size),
+                        text = names,
+                        useAlarmChannel = settings.alarmSound,
+                        attempt = attempt,
+                        fullScreen = settings.fullScreenAlarm,
+                    )
+                } else {
+                    Notifications.show(
+                        context = app,
+                        doseId = doseId,
+                        title = if (private) {
+                            Lang.s.timeToTakeFallback
+                        } else {
+                            Lang.s.timeToTake(med.name)
+                        },
+                        text = text,
+                        useAlarmChannel = settings.alarmSound,
+                        attempt = attempt,
+                        fullScreen = settings.fullScreenAlarm,
+                    )
+                }
 
                 if (settings.repeatEnabled && attempt + 1 < settings.repeatCount) {
                     var nextAt = System.currentTimeMillis() +
@@ -109,6 +145,9 @@ class ReminderReceiver : BroadcastReceiver() {
 
     companion object {
         const val EXTRA_ATTEMPT = "attempt"
+
+        /** Насколько близкие по времени приёмы считаются одной группой. */
+        private const val GROUP_WINDOW_MS = 60_000L
         const val EXTRA_TEST = "test"
         const val EXTRA_TEST_FULL_SCREEN = "testFullScreen"
     }

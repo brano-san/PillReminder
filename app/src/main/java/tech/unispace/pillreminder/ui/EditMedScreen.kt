@@ -33,10 +33,23 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import tech.unispace.pillreminder.data.MedLibraryEntry
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +64,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,12 +75,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import java.time.LocalTime
 import tech.unispace.pillreminder.data.MED_FORMS
+import tech.unispace.pillreminder.data.apartFromList
+import tech.unispace.pillreminder.data.byClock
+import tech.unispace.pillreminder.data.fixedTimesList
 import tech.unispace.pillreminder.data.Medication
 import tech.unispace.pillreminder.data.today
 
 /** Шаги мастера. Промежуток между приёмами живёт на шаге «как часто». */
-private enum class Step { NAME, FORM, COMMENT, AMOUNT, FREQ, DURATION, FIRST }
+private enum class Step { NAME, DETAILS, AMOUNT, FREQ, CONDITIONS, SUMMARY }
 
 private val pageAnim = tween<Float>(durationMillis = 150)
 
@@ -97,11 +115,137 @@ fun defaultIntervalMinutes(timesPerDay: Int): Int? = when {
     else -> (AWAKE_HOURS_DEFAULT * 60 / (timesPerDay - 1)).coerceAtLeast(30)
 }
 
+/** Набор меток о лекарстве — те же факты, что показывает карточка на главном экране. */
+private fun previewFacts(
+    form: String,
+    doseValue: String,
+    doseUnit: String,
+    amount: String,
+    times: Int,
+    interval: Int,
+    everyNDays: Int,
+    duration: Int,
+    byClock: Boolean,
+    clockTimes: List<Int>,
+    asNeeded: Boolean,
+    stock: String,
+): List<String> {
+    val s = Lang.s
+    val amountValue = amount.replace(',', '.').toDoubleOrNull() ?: 1.0
+    return buildList {
+        add(listOf(form, listOf(doseValue, doseUnit).filter { it.isNotBlank() }.joinToString(" ")).filter { it.isNotBlank() }.joinToString(" "))
+        add(s.perIntake(s.pills(amountValue, form)))
+        when {
+            asNeeded -> add(s.asNeededShort)
+            byClock -> add(s.byClockShort + " " + clockTimes.sorted().joinToString(", ") { hhmmText(it) })
+            else -> add(s.schedule(times, interval, everyNDays))
+        }
+        if (duration > 0) add(s.durationLabelShort(duration))
+        if (stock.isNotBlank()) add(s.stockLeft(stock))
+    }
+}
+
+/**
+ * Выбор промежутка: пресеты списком плюс «своё…». Отдельным компонентом, потому что
+ * используется и для «после еды», и для «до еды».
+ */
+@Composable
+private fun MinutesPicker(value: Int, label: String, onPick: (Int) -> Unit) {
+    val s = Lang.s
+    var expanded by remember { mutableStateOf(false) }
+    var customDialog by remember { mutableStateOf(false) }
+    var customText by remember { mutableStateOf("") }
+    // MEAL_NOW = «сразу»: 0 означает «неважно», поэтому нужна отдельная минимальная величина.
+    val presets = listOf(MEAL_NOW, 30, 60, 120, 180)
+
+    if (customDialog) {
+        AlertDialog(
+            onDismissRequest = { customDialog = false },
+            title = { Text(s.mealCustomTitle) },
+            text = {
+                OutlinedTextField(
+                    value = customText,
+                    onValueChange = { customText = it.filter { c -> c.isDigit() }.take(4) },
+                    label = { Text(s.minutesLabel) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = (customText.toIntOrNull() ?: 0) > 0,
+                    onClick = {
+                        customText.toIntOrNull()?.coerceIn(1, 1440)?.let(onPick)
+                        customDialog = false
+                    },
+                ) { Text(s.done) }
+            },
+            dismissButton = { TextButton(onClick = { customDialog = false }) { Text(s.cancel) } },
+        )
+    }
+
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = when {
+                value <= 0 -> s.mealNone
+                value == MEAL_NOW -> s.mealImmediately
+                else -> s.duration(value)
+            },
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = fieldColors(),
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(s.mealNone) },
+                onClick = {
+                    onPick(0)
+                    expanded = false
+                },
+            )
+            presets.forEach { m ->
+                DropdownMenuItem(
+                    text = { Text(if (m == MEAL_NOW) s.mealImmediately else s.duration(m)) },
+                    onClick = {
+                        onPick(m)
+                        expanded = false
+                    },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(s.mealCustom) },
+                onClick = {
+                    expanded = false
+                    customText = if (value > 0) value.toString() else ""
+                    customDialog = true
+                },
+            )
+        }
+    }
+}
+
+/** «Сразу после еды»: ноль занят значением «неважно», поэтому одна минута. */
+const val MEAL_NOW = 1
+
+/** Времена «по часам» по умолчанию: с 9:00 через выбранный промежуток. */
+fun defaultClockTimes(times: Int, intervalMinutes: Int): List<Int> {
+    val step = if (intervalMinutes > 0) intervalMinutes else 24 * 60 / times.coerceAtLeast(1)
+    return (0 until times.coerceIn(1, 24)).map { (9 * 60 + it * step) % (24 * 60) }.distinct().sorted()
+}
+
+private fun hhmmText(minutes: Int) = "%02d:%02d".format(minutes / 60, minutes % 60)
+
 @Composable
 fun EditMedScreen(
     vm: MainViewModel,
     medId: Long,
     onOpenLibrary: () -> Unit,
+    onOpenLibraryEntry: (Long) -> Unit,
     onDone: () -> Unit,
 ) {
     val s = Lang.s
@@ -125,13 +269,29 @@ fun EditMedScreen(
     var linkedTo by remember { mutableStateOf<Long?>(null) }
     var linkedDelay by remember { mutableStateOf("120") }
     var stockText by remember { mutableStateOf("") }
+    // Расписание «по часам»: пустой список = приёмы считаются от кнопки «я проснулся».
+    var byClock by remember { mutableStateOf(false) }
+    var clockTimes by remember { mutableStateOf(listOf(9 * 60)) }
+    var editTimeIndex by remember { mutableStateOf<Int?>(null) }
+    var confirmQuickSave by remember { mutableStateOf(false) }
+    var showRecommend by remember { mutableStateOf(false) }
+    var photoPromptFor by remember { mutableStateOf<Long?>(null) }
+    // Ограничения по еде и по соседству с другими таблетками; 0 — не важно.
+    var afterMeal by remember { mutableIntStateOf(0) }
+    var apartOthers by remember { mutableIntStateOf(0) }
+    var beforeMeal by remember { mutableIntStateOf(0) }
+    var apartIds by remember { mutableStateOf(emptySet<Long>()) }
+    // Выбранная готовая схема; слетает, как только что-то правят руками.
+    var template by remember { mutableStateOf<String?>(null) }
     var otherMeds by remember { mutableStateOf<List<Medication>>(emptyList()) }
     var libraryNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    var libraryEntries by remember { mutableStateOf<List<MedLibraryEntry>>(emptyList()) }
     var existing by remember { mutableStateOf<Medication?>(null) }
 
     LaunchedEffect(medId) {
         otherMeds = vm.activeMeds().filter { it.id != medId && it.linkedToMedId == null }
-        libraryNames = vm.libraryEntries().map { it.name }.distinct()
+        libraryEntries = vm.libraryEntries()
+        libraryNames = libraryEntries.map { it.name }.filter { it.isNotBlank() }.distinct()
         if (!isNew) {
             vm.load(medId)?.let { med ->
                 existing = med
@@ -156,6 +316,12 @@ fun EditMedScreen(
                 linkedTo = med.linkedToMedId
                 linkedDelay = med.linkedDelayMinutes.toString()
                 stockText = med.stockCount?.let { it.toInt().toString() } ?: ""
+                byClock = med.byClock
+                clockTimes = med.fixedTimesList().ifEmpty { listOf(9 * 60) }
+                afterMeal = med.afterMealMinutes
+                apartOthers = med.apartFromOthersMinutes
+                beforeMeal = med.beforeMealMinutes
+                apartIds = med.apartFromList().toSet()
             }
             loaded = true
         }
@@ -164,9 +330,14 @@ fun EditMedScreen(
     /** Смена числа приёмов подставляет промежуток по схеме; пользователь может поправить руками. */
     fun setTimes(raw: String) {
         timesPerDay = raw
-        val m = defaultIntervalMinutes(raw.toIntOrNull() ?: return) ?: return
-        intervalHours = (m / 60).toString()
-        intervalMinutes = (m % 60).toString()
+        template = null
+        val n = raw.toIntOrNull() ?: return
+        val m = defaultIntervalMinutes(n)
+        if (m != null) {
+            intervalHours = (m / 60).toString()
+            intervalMinutes = (m % 60).toString()
+        }
+        if (byClock) clockTimes = defaultClockTimes(n, m ?: 0)
     }
     val times = (timesPerDay.toIntOrNull() ?: 1).coerceIn(1, 24)
     val interval = ((intervalHours.toIntOrNull() ?: 0) * 60 + (intervalMinutes.toIntOrNull() ?: 0)).coerceAtLeast(5)
@@ -184,6 +355,17 @@ fun EditMedScreen(
         scope.launch { pager.animateScrollToPage(target.coerceIn(0, steps.lastIndex), animationSpec = pageAnim) }
     }
 
+    editTimeIndex?.let { idx ->
+        val cur = clockTimes.getOrElse(idx) { 9 * 60 }
+        TimeWheelDialog(
+            initial = LocalTime.of(cur / 60, cur % 60),
+            onPick = { t ->
+                clockTimes = clockTimes.toMutableList().also { it[idx] = t.hour * 60 + t.minute }.distinct().sorted()
+            },
+            onDismiss = { editTimeIndex = null },
+        )
+    }
+
     fun save() {
         if (name.isBlank()) return
         val doseInfo = if (doseValue.isBlank()) "" else (doseValue.trim() + " " + doseUnit.trim()).trim()
@@ -191,7 +373,12 @@ fun EditMedScreen(
             name = name.trim(),
             comment = comment.trim(),
             dosesPerIntake = amount.replace(',', '.').toDoubleOrNull()?.coerceAtLeast(0.01) ?: 1.0,
-            timesPerDay = times,
+            timesPerDay = if (byClock && !asNeeded) clockTimes.size else times,
+            fixedTimes = if (byClock && !asNeeded) clockTimes.sorted().joinToString(",") else "",
+            afterMealMinutes = afterMeal,
+            beforeMealMinutes = beforeMeal,
+            apartFromOthersMinutes = apartOthers,
+            apartFromMedIds = if (apartOthers > 0) apartIds.joinToString(",") else "",
             intervalMinutes = interval,
             everyNDays = days,
             firstDoseOffsetMinutes = offset,
@@ -204,7 +391,79 @@ fun EditMedScreen(
             linkedDelayMinutes = (linkedDelay.toIntOrNull() ?: 120).coerceIn(1, 24 * 60),
             stockCount = stockText.toIntOrNull()?.toDouble(),
         )
-        vm.save(med) { onDone() }
+        vm.save(med) { savedId ->
+            // Новая таблетка заводится и в каталоге — предлагаем сразу добавить фото упаковки.
+            if (isNew) {
+                scope.launch {
+                    val entry = vm.libraryEntries().firstOrNull { it.name.equals(med.name, ignoreCase = true) }
+                    if (entry != null) photoPromptFor = entry.id else onDone()
+                }
+            } else {
+                onDone()
+            }
+        }
+    }
+
+    if (showRecommend) {
+        AlertDialog(
+            onDismissRequest = { showRecommend = false },
+            title = { Text(s.recommendTitle) },
+            text = { Text(s.recommendBody) },
+            confirmButton = { TextButton(onClick = { showRecommend = false }) { Text(s.done) } },
+        )
+    }
+    if (confirmQuickSave) {
+        AlertDialog(
+            onDismissRequest = { confirmQuickSave = false },
+            title = { Text(s.quickSaveTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(s.quickSaveBody, style = MaterialTheme.typography.bodyMedium)
+                    // Тот же набор меток, что и на карточке главного экрана.
+                    Text(name.trim(), fontWeight = FontWeight.SemiBold)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        previewFacts(
+                            form = form,
+                            doseValue = doseValue,
+                            doseUnit = doseUnit,
+                            amount = amount,
+                            times = times,
+                            interval = interval,
+                            everyNDays = days,
+                            duration = duration,
+                            byClock = byClock,
+                            clockTimes = clockTimes,
+                            asNeeded = asNeeded,
+                            stock = stockText,
+                        ).forEach { fact ->
+                            Text(
+                                fact,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { confirmQuickSave = false; save() }) { Text(s.save) } },
+            dismissButton = { TextButton(onClick = { confirmQuickSave = false }) { Text(s.quickSaveMore) } },
+        )
+    }
+    photoPromptFor?.let { entryId ->
+        AlertDialog(
+            onDismissRequest = { photoPromptFor = null; onDone() },
+            title = { Text(s.photoPromptTitle) },
+            text = { Text(s.photoPromptBody) },
+            confirmButton = {
+                TextButton(onClick = {
+                    photoPromptFor = null
+                    onOpenLibraryEntry(entryId)
+                }) { Text(s.photoPromptAdd) }
+            },
+            dismissButton = { TextButton(onClick = { photoPromptFor = null; onDone() }) { Text(s.later) } },
+        )
     }
 
     Scaffold(
@@ -250,6 +509,14 @@ fun EditMedScreen(
                         Text(s.back, maxLines = 1, softWrap = false)
                     }
                 }
+                // Быстрый путь: имя есть — можно сохранить с дефолтами, не листая мастер.
+                AnimatedVisibility(visible = !isLast && name.isNotBlank()) {
+                    OutlinedButton(
+                        onClick = { confirmQuickSave = true },
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        modifier = Modifier.height(buttonHeight),
+                    ) { Text(s.quickSaveBtn, maxLines = 1, softWrap = false) }
+                }
                 Button(
                     onClick = { if (isLast) save() else goTo(page + 1) },
                     enabled = name.isNotBlank(),
@@ -273,7 +540,28 @@ fun EditMedScreen(
                         if (libraryNames.isNotEmpty()) {
                             Text(s.fromLibraryHint, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                libraryNames.forEach { n -> FilterChip(selected = name == n, onClick = { name = n }, label = { Text(n) }) }
+                                libraryNames.forEach { n ->
+                                    FilterChip(
+                                        selected = name == n,
+                                        onClick = {
+                                            name = n
+                                            // Из каталога подтягиваем форму и дозировку — их не нужно вводить снова.
+                                            libraryEntries.firstOrNull { it.name == n }?.let { entry ->
+                                                if (entry.form.isNotBlank()) {
+                                                    form = entry.form
+                                                    formIsCustom = entry.form !in MED_FORMS
+                                                }
+                                                if (entry.doseInfo.isNotBlank()) {
+                                                    val (v, u) = splitDose(entry.doseInfo, s.doseUnits)
+                                                    doseValue = v
+                                                    doseUnit = u
+                                                    unitIsCustom = u !in s.doseUnits
+                                                }
+                                            }
+                                        },
+                                        label = { Text(n) },
+                                    )
+                                }
                             }
                         }
                         OutlinedTextField(
@@ -281,6 +569,7 @@ fun EditMedScreen(
                             onValueChange = { name = it },
                             label = { Text(s.nameLabel) },
                             placeholder = { Text(s.namePlaceholder) },
+                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                             singleLine = true,
                             colors = fieldColors(),
                             supportingText = { if (name.isBlank()) Text(s.nameOptionalHint) },
@@ -293,8 +582,9 @@ fun EditMedScreen(
                         }
                     }
 
-                    Step.FORM -> {
-                        StepHeader(s.formQ, s.formBody)
+                    Step.DETAILS -> {
+                        StepHeader(s.detailsQ, s.detailsBody)
+                        SectionCard(s.formSection) {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             MED_FORMS.forEachIndexed { i, f ->
                                 FilterChip(selected = form == f && !formIsCustom, onClick = { form = f; formIsCustom = false }, label = { Text(s.forms.getOrElse(i) { f }) })
@@ -307,25 +597,30 @@ fun EditMedScreen(
                                 onValueChange = { form = it },
                                 label = { Text(s.customFormLabel) },
                                 placeholder = { Text(s.customFormPlaceholder) },
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                 singleLine = true,
                                 colors = fieldColors(),
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                    }
-
-                    Step.COMMENT -> {
-                        StepHeader(s.commentQ, s.commentBody)
-                        OutlinedTextField(
-                            value = comment,
-                            onValueChange = { comment = it },
-                            label = { Text(s.commentLabel) },
-                            placeholder = { Text(s.commentPlaceholder) },
-                            minLines = 3,
-                            colors = fieldColors(),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        HintCard(s.commentHint)
+                        }
+                        SectionCard(s.commentSection) {
+                            OutlinedTextField(
+                                value = comment,
+                                onValueChange = { comment = it },
+                                label = { Text(s.commentLabel) },
+                                placeholder = { Text(s.commentPlaceholder) },
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                                minLines = 3,
+                                colors = fieldColors(),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                s.commentHint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
 
                     Step.AMOUNT -> {
@@ -421,11 +716,43 @@ fun EditMedScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                             }
+                            SectionCard(s.scheduleSection) {
+                                Text(s.scheduleBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FilterChip(selected = !byClock, onClick = { byClock = false }, label = { Text(s.modeWake) })
+                                    FilterChip(
+                                        selected = byClock,
+                                        onClick = {
+                                            byClock = true
+                                            clockTimes = defaultClockTimes(times, interval)
+                                            // «По часам» не совместимо со связкой: время задаётся явно.
+                                            linkedTo = null
+                                        },
+                                        label = { Text(s.modeClock) },
+                                    )
+                                }
+                                if (byClock) {
+                                    Text(s.clockTimesTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        clockTimes.forEachIndexed { i, m ->
+                                            InputChip(selected = false, onClick = { editTimeIndex = i }, label = { Text(hhmmText(m)) })
+                                        }
+                                    }
+                                    Text(s.clockTimesHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                             // Промежуток — прямо здесь, где выбирают число приёмов.
-                            if (times > 1) {
+                            if (times > 1 && !byClock) {
                                 SectionCard(s.intervalSection) {
                                     Text(s.intervalBodyMulti, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(s.intervalAutoHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                    TextButton(
+                                        onClick = { showRecommend = true },
+                                        contentPadding = PaddingValues(horizontal = 8.dp),
+                                    ) {
+                                        Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(s.recommendBtn, style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+                                    }
                                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         listOf(180, 240, 300, 360, 480, 720).forEach { m ->
                                             FilterChip(
@@ -476,45 +803,90 @@ fun EditMedScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                             }
+                            SectionCard(s.durationQ) {
+                                Text(s.durationBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(0 to s.durUnlimited, 7 to s.durWeek, 14 to s.dur2Weeks, 30 to s.durMonth).forEach { (d, label) ->
+                                        FilterChip(
+                                            selected = duration == d,
+                                            onClick = { durationText = d.toString(); template = null },
+                                            label = { Text(label) },
+                                        )
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = durationText,
+                                    onValueChange = { durationText = it.filter { c -> c.isDigit() }; template = null },
+                                    label = { Text(s.durationLabel) },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    colors = fieldColors(),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                if (!isNew) {
+                                    Text(s.durationNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    OutlinedButton(onClick = { vm.finishCourse(medId) { onDone() } }, modifier = Modifier.fillMaxWidth()) {
+                                        Text(s.finishCourseNow, maxLines = 1, softWrap = false)
+                                    }
+                                }
+                            }
+                            // Итог — последним: он подводит черту под всеми настройками шага.
                             HintCard(s.scheduleResult(s.schedule(times, interval, days)))
                         }
                     }
 
-                    Step.DURATION -> {
-                        StepHeader(s.durationQ, s.durationBody)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(0 to s.durUnlimited, 7 to s.durWeek, 14 to s.dur2Weeks, 30 to s.durMonth).forEach { (d, label) ->
-                                FilterChip(selected = duration == d, onClick = { durationText = d.toString() }, label = { Text(label) })
+                    Step.CONDITIONS -> {
+                        StepHeader(s.conditionsQ, s.conditionsBody)
+                        SectionCard(s.firstDoseSection) {
+                        Text(s.firstDoseBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (byClock) Text(s.clockNoOffset, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (!byClock) {
+                            // По две кнопки в ряд: «после другой таблетки» не помещается в одну строку.
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                maxItemsInEachRow = 1,
+                            ) {
+                                FilterChip(
+                                    selected = linkedTo == null && afterMeal == 0,
+                                    onClick = { linkedTo = null; afterMeal = 0 },
+                                    label = { Text(s.fromWake, maxLines = 1, softWrap = false) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                FilterChip(
+                                    selected = linkedTo == null && afterMeal > 0,
+                                    onClick = {
+                                        linkedTo = null
+                                        // «Сразу после еды» — самый частый случай; точное время правится ниже.
+                                        if (afterMeal == 0) afterMeal = MEAL_NOW
+                                    },
+                                    label = { Text(s.fromMeal, maxLines = 1, softWrap = false) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                FilterChip(
+                                    selected = linkedTo != null,
+                                    onClick = {
+                                        if (otherMeds.isNotEmpty()) {
+                                            linkedTo = otherMeds.first().id
+                                            // Якорь один: «после другой таблетки» отменяет «после еды».
+                                            afterMeal = 0
+                                        }
+                                    },
+                                    label = { Text(s.afterOtherPill, maxLines = 1, softWrap = false) },
+                                    enabled = otherMeds.isNotEmpty(),
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            // 10: подсказка относится только к недоступному варианту, поэтому стоит под ним.
+                            if (otherMeds.isEmpty()) {
+                                Text(
+                                    s.linkNoMeds,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
-                        OutlinedTextField(
-                            value = durationText,
-                            onValueChange = { durationText = it.filter { c -> c.isDigit() } },
-                            label = { Text(s.durationLabel) },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            colors = fieldColors(),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        if (!isNew) {
-                            HintCard(s.durationNote)
-                            OutlinedButton(onClick = { vm.finishCourse(medId) { onDone() } }, modifier = Modifier.fillMaxWidth()) { Text(s.finishCourseNow) }
-                        }
-                    }
-
-                    Step.FIRST -> {
-                        StepHeader(s.firstDoseQ, s.firstDoseBody)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(selected = linkedTo == null, onClick = { linkedTo = null }, label = { Text(s.fromWake) })
-                            FilterChip(
-                                selected = linkedTo != null,
-                                onClick = { if (otherMeds.isNotEmpty()) linkedTo = otherMeds.first().id },
-                                label = { Text(s.afterOtherPill) },
-                                enabled = otherMeds.isNotEmpty(),
-                            )
-                        }
-                        if (linkedTo == null) {
-                            if (otherMeds.isEmpty()) HintCard(s.linkNoMeds)
+                        if (!byClock && linkedTo == null && afterMeal == 0) {
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 listOf(0 to s.immediately, 15 to "+15", 30 to "+30", 45 to "+45", 60 to "+60", 120 to "+120").forEach { (m, label) ->
                                     FilterChip(selected = offset == m, onClick = { offsetMinutes = m.toString() }, label = { Text(label) })
@@ -529,7 +901,7 @@ fun EditMedScreen(
                                 colors = fieldColors(),
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                        } else {
+                        } else if (!byClock && linkedTo != null) {
                             SectionCard(s.linkPickLabel) {
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     otherMeds.forEach { med -> FilterChip(selected = linkedTo == med.id, onClick = { linkedTo = med.id }, label = { Text(med.name) }) }
@@ -545,6 +917,66 @@ fun EditMedScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
+                        }
+                        SectionCard(s.apartSection) {
+                            Text(s.apartSectionBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(selected = apartOthers == 0, onClick = { apartOthers = 0 }, label = { Text(s.apartNo) })
+                                listOf(30, 60, 120).forEach { m ->
+                                    FilterChip(
+                                        selected = apartOthers == m,
+                                        onClick = { apartOthers = m },
+                                        label = { Text(s.apartFor(s.duration(m)), maxLines = 1, softWrap = false) },
+                                    )
+                                }
+                            }
+                            // С какими именно таблетками разносить: пусто = с любыми.
+                            if (apartOthers > 0 && otherMeds.isNotEmpty()) {
+                                Text(s.apartPickLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                                if (linkedTo != null) {
+                                    Text(
+                                        s.apartConflictHint,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FilterChip(
+                                        selected = apartIds.isEmpty(),
+                                        onClick = { apartIds = emptySet() },
+                                        label = { Text(s.apartAny, maxLines = 1, softWrap = false) },
+                                    )
+                                    otherMeds.filter { it.id != linkedTo }.forEach { other ->
+                                        FilterChip(
+                                            selected = other.id in apartIds,
+                                            onClick = {
+                                                apartIds = if (other.id in apartIds) apartIds - other.id else apartIds + other.id
+                                            },
+                                            label = { Text(other.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        SectionCard(s.mealBeforeSection) {
+                            MinutesPicker(
+                                value = beforeMeal,
+                                label = s.mealBeforeSection,
+                                onPick = { beforeMeal = it; template = null },
+                            )
+                        }
+                        SectionCard(s.mealAfterSection) {
+                            Text(s.mealSectionBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            MinutesPicker(
+                                value = afterMeal,
+                                label = s.mealAfterSection,
+                                onPick = { afterMeal = it; template = null },
+                            )
+                        }
+                    }
+
+                    Step.SUMMARY -> {
+                        StepHeader(s.summaryQ, s.summaryBody)
                         SummaryCard(
                             name = name,
                             comment = comment,
@@ -557,6 +989,30 @@ fun EditMedScreen(
                             linkedName = otherMeds.firstOrNull { it.id == linkedTo }?.name,
                             linkedDelayMin = linkedDelay.toIntOrNull() ?: 120,
                         )
+                        // Не чипы: метки на итоговом экране ничего не открывают, и это должно быть видно.
+                        SectionCard(s.summaryQ) {
+                            previewFacts(
+                                form = form,
+                                doseValue = doseValue,
+                                doseUnit = doseUnit,
+                                amount = amount,
+                                times = times,
+                                interval = interval,
+                                everyNDays = days,
+                                duration = duration,
+                                byClock = byClock,
+                                clockTimes = clockTimes,
+                                asNeeded = asNeeded,
+                                stock = stockText,
+                            ).forEach { fact ->
+                                Text("• " + fact, style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Text(
+                                s.summaryHint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.height(24.dp))

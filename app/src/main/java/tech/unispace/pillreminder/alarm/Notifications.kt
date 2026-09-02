@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import tech.unispace.pillreminder.MainActivity
 import tech.unispace.pillreminder.R
+import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.ui.Lang
 
@@ -171,6 +172,74 @@ object Notifications {
         notifySafely(context, doseId.toInt(), builder)
     }
 
+    /** Одно уведомление на несколько приёмов, назначенных в одну минуту. */
+    fun showGroup(
+        context: Context,
+        doses: List<Dose>,
+        title: String,
+        text: String,
+        useAlarmChannel: Boolean,
+        attempt: Int = 0,
+        fullScreen: Boolean = false,
+    ) {
+        val leaderId = doses.first().id
+        val ids = doses.map { it.id }.toLongArray()
+        val fullText = if (attempt > 0) text + "\n" + Lang.s.reminderN(attempt + 1) else text
+
+        val takeAll = PendingIntent.getBroadcast(
+            context,
+            leaderId.toInt(),
+            Intent(context, ActionReceiver::class.java)
+                .setAction(ActionReceiver.ACTION_TAKE_GROUP)
+                .setData(Uri.parse("pill://group/" + leaderId))
+                .putExtra(ActionReceiver.EXTRA_DOSE_IDS, ids),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val snoozeMin = Settings(context).snoozeMinutes
+        val builder = NotificationCompat.Builder(
+            context,
+            if (useAlarmChannel) alarmChannelId(context) else defaultChannelId(context),
+        )
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(title)
+            .setContentText(fullText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(fullText))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(false)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    leaderId.toInt(),
+                    Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .addAction(R.drawable.ic_pill, Lang.s.takeAllAction, takeAll)
+            .addAction(R.drawable.ic_pill, Lang.s.snoozeAction(snoozeMin), action(context, leaderId, ActionReceiver.ACTION_SNOOZE, "snooze"))
+
+        if (fullScreen) {
+            val alarmIntent = Intent(context, AlarmActivity::class.java)
+                .setData(Uri.parse("pill://fullscreen/" + leaderId))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(EXTRA_DOSE_ID, leaderId)
+                .putExtra(AlarmActivity.EXTRA_TITLE, title)
+                .putExtra(AlarmActivity.EXTRA_TEXT, fullText)
+            builder.setFullScreenIntent(
+                PendingIntent.getActivity(
+                    context,
+                    leaderId.toInt(),
+                    alarmIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+                true,
+            )
+        }
+        notifySafely(context, leaderId.toInt(), builder)
+    }
+
     fun showVisit(context: Context, visitId: Long, title: String, whenText: String) {
         val open = PendingIntent.getActivity(
             context,
@@ -228,6 +297,27 @@ object Notifications {
         notifySafely(context, (700_000 + medId).toInt(), builder)
     }
 
+    /** «Все приёмы на сегодня отмечены» — можно начинать новый день, когда проснётесь. */
+    fun showDayDone(context: Context) {
+        val s = Lang.s
+        val builder = NotificationCompat.Builder(context, defaultChannelId(context))
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(s.dayDoneTitle)
+            .setContentText(s.dayDoneBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(s.dayDoneBody))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    DAY_DONE_ID,
+                    Intent(context, MainActivity::class.java),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        notifySafely(context, DAY_DONE_ID, builder)
+    }
+
     private fun notifySafely(context: Context, id: Int, builder: NotificationCompat.Builder) {
         try {
             NotificationManagerCompat.from(context).notify(id, builder.build())
@@ -252,4 +342,5 @@ object Notifications {
     }
 
     private const val VISIT_ID_BASE = 500_000L
+    private const val DAY_DONE_ID = 900_001
 }

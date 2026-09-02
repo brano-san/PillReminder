@@ -41,6 +41,13 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -114,7 +121,7 @@ private val tmFmt = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)
 
 private fun Long.toLdt(): LocalDateTime = Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).toLocalDateTime()
 
-private fun trimNum(v: Double): String =
+fun trimNum(v: Double): String =
     if (v % 1.0 == 0.0) v.toInt().toString() else String.format(Locale.ROOT, "%.1f", v)
 
 private fun hhmm(minutes: Int): String = "%02d:%02d".format(minutes / 60, minutes % 60)
@@ -159,6 +166,15 @@ fun LineChart(
     showPoints: Boolean = true,
     showGrid: Boolean = false,
     xLabels: List<String> = emptyList(),
+    /** Индексы точек, собранных кнопками: данных меньше, рисуем контуром. */
+    hollowPoints: Set<Int> = emptySet(),
+    /** Границы шкалы: у сна и настроения они всегда 0–5, у веса считаются по данным. */
+    range: ClosedFloatingPointRange<Double>? = null,
+    /** Сглаженная линия вместо ломаной. */
+    smooth: Boolean = true,
+    /** Вторая серия (оценка пробуждения у сна); рисуется другим цветом. */
+    extraValues: List<Double> = emptyList(),
+    extraColor: Color = Color.Unspecified,
 ) {
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
@@ -170,52 +186,95 @@ fun LineChart(
         val hasXLabels = showGrid && xLabels.size == values.size && values.size >= 2
         val bottomPad = if (hasXLabels) X_LABELS_PAD else 0f
         val usable = size.height - padY * 2 - bottomPad
-        val min = values.minOrNull() ?: 0.0
-        val max = values.maxOrNull() ?: 1.0
+        val min = range?.start ?: values.minOrNull() ?: 0.0
+        val max = range?.endInclusive ?: values.maxOrNull() ?: 1.0
         val span = (max - min).takeIf { it > 0.0 } ?: 1.0
 
         fun yOf(v: Double): Float = padY + usable * (1f - ((v - min) / span).toFloat())
 
-        if (showGrid) {
-            val paint = android.graphics.Paint().apply {
-                isAntiAlias = true
-                textSize = 26f
-                this.color = labelColor
-            }
-            for (i in 0..3) {
-                val frac = i / 3f
-                val y = padY + usable * (1f - frac)
-                drawLine(gridColor, Offset(labelPad, y), Offset(size.width, y), strokeWidth = 1.5f)
-                if (values.isNotEmpty()) {
-                    drawContext.canvas.nativeCanvas.drawText(trimNum(min + span * frac), 0f, y + 9f, paint)
+        // Сетка рисуется всегда — и на большом графике, и на превью, даже без данных:
+        // так виден масштаб, а пустой блок не выглядит сломанным.
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textSize = 26f
+            this.color = labelColor
+        }
+        for (i in 0..3) {
+            val frac = i / 3f
+            val y = padY + usable * (1f - frac)
+            val dashed = !showGrid
+            if (dashed) {
+                var x = labelPad
+                while (x < size.width) {
+                    drawLine(gridColor, Offset(x, y), Offset(minOf(x + 8f, size.width), y), strokeWidth = 1.2f)
+                    x += 16f
                 }
-            }
-        } else {
-            // Мини-режим без данных: пунктирная базовая линия, чтобы блок не был пустым.
-            val y = size.height / 2
-            var x = 0f
-            while (x < size.width) {
-                drawLine(gridColor, Offset(x, y), Offset(minOf(x + 10f, size.width), y), strokeWidth = 2f)
-                x += 18f
+            } else {
+                drawLine(gridColor, Offset(labelPad, y), Offset(size.width, y), strokeWidth = 1.5f)
+                drawContext.canvas.nativeCanvas.drawText(trimNum(min + span * frac), 0f, y + 9f, paint)
             }
         }
 
         if (hasXLabels) drawXLabels(xLabels, labelPad, chartWidth, labelColor)
         if (values.size < 2) return@Canvas
         val stepX = chartWidth / (values.size - 1)
+        val points = values.mapIndexed { i, v -> Offset(labelPad + stepX * i, yOf(v)) }
         val path = Path()
-        values.forEachIndexed { i, v ->
-            val x = labelPad + stepX * i
-            val y = yOf(v)
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        path.moveTo(points.first().x, points.first().y)
+        if (smooth) {
+            // Кубические кривые с небольшим натяжением: линия мягкая, но идёт через сами точки,
+            // а не «мимо» них, как при сглаживании по серединам отрезков.
+            val tension = 0.2f
+            for (i in 0 until points.size - 1) {
+                val p0 = points[(i - 1).coerceAtLeast(0)]
+                val p1 = points[i]
+                val p2 = points[i + 1]
+                val p3 = points[(i + 2).coerceAtMost(points.size - 1)]
+                path.cubicTo(
+                    p1.x + (p2.x - p0.x) * tension,
+                    p1.y + (p2.y - p0.y) * tension,
+                    p2.x - (p3.x - p1.x) * tension,
+                    p2.y - (p3.y - p1.y) * tension,
+                    p2.x,
+                    p2.y,
+                )
+            }
+        } else {
+            points.drop(1).forEach { path.lineTo(it.x, it.y) }
         }
         drawPath(path, color, style = Stroke(width = strokeWidth))
+        // Вторая серия рисуется тем же способом, но тоньше и без точек.
+        if (extraValues.size == values.size && extraValues.size >= 2) {
+            val extraPath = Path()
+            val extraPoints = extraValues.mapIndexed { i, v -> Offset(labelPad + stepX * i, yOf(v)) }
+            extraPath.moveTo(extraPoints.first().x, extraPoints.first().y)
+            extraPoints.drop(1).forEach { extraPath.lineTo(it.x, it.y) }
+            drawPath(extraPath, extraColor, style = Stroke(width = strokeWidth * 0.6f))
+        }
         if (showPoints) {
             values.forEachIndexed { i, v ->
-                drawCircle(color, radius = strokeWidth * 1.4f, center = Offset(labelPad + stepX * i, yOf(v)))
+                val center = Offset(labelPad + stepX * i, yOf(v))
+                if (i in hollowPoints) {
+                    drawCircle(color, radius = strokeWidth * 1.6f, center = center, style = Stroke(width = strokeWidth * 0.7f))
+                } else {
+                    drawCircle(color, radius = strokeWidth * 1.4f, center = center)
+                }
             }
         }
     }
+}
+
+/**
+ * Границы шкалы графика: оценки всегда 0–5, вес — 0–100 без данных
+ * и «минимум − 5 … максимум + 5» с данными, чтобы линия шла посередине.
+ */
+fun chartRange(type: String, values: List<Double>): ClosedFloatingPointRange<Double> = when (type) {
+    TrackerType.WEIGHT -> {
+        val min = values.minOrNull()
+        val max = values.maxOrNull()
+        if (min == null || max == null) 0.0..100.0 else (min - 5).coerceAtLeast(0.0)..(max + 5)
+    }
+    else -> 0.0..5.0
 }
 
 /** Высота полосы под подписи дат по оси X. */
@@ -276,6 +335,22 @@ fun TrackersScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            // Кнопка нужна, только когда не создано хотя бы два трекера: ради одного она лишняя.
+            val missing = TRACKER_TYPES.filter { t -> rows.none { it.tracker.type == t } }
+            if (missing.size >= 2) {
+                item(key = "create-all") {
+                    OutlinedButton(
+                        onClick = { missing.forEach(onCreate) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (missing.size == TRACKER_TYPES.size) s.createAllTrackers else s.createRemaining,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
             items(TRACKER_TYPES, key = { it }) { type ->
                 val row = rows.firstOrNull { it.tracker.type == type }
                 if (row != null) TrackerCard(row, miniPoints, onOpen) { addFor = row.tracker } else TemplateCard(type, onCreate)
@@ -317,6 +392,7 @@ private fun TemplateCard(type: String, onCreate: (String) -> Unit) {
 
 @Composable
 private fun TrackerCard(row: TrackerRow, miniPoints: Int, onOpen: (Long) -> Unit, onAdd: () -> Unit) {
+    val smoothCharts = Settings(LocalContext.current).chartSmooth
     val s = Lang.s
     val last = row.entries.firstOrNull()
     Card(Modifier.fillMaxWidth().clickable { onOpen(row.tracker.id) }) {
@@ -327,7 +403,7 @@ private fun TrackerCard(row: TrackerRow, miniPoints: Int, onOpen: (Long) -> Unit
                 Column(Modifier.weight(1f)) {
                     Text(trackerDisplayName(row.tracker.type), fontWeight = FontWeight.SemiBold)
                     Text(
-                        last?.let { trimNum(it.value) + " · " + formatNoteTime(it.atMillis) } ?: s.neverRecorded,
+                        last?.let { formatNoteTime(it.atMillis) } ?: s.neverRecorded,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -336,11 +412,14 @@ private fun TrackerCard(row: TrackerRow, miniPoints: Int, onOpen: (Long) -> Unit
                 FilledTonalIconButton(onClick = onAdd) { Icon(Icons.Default.Add, contentDescription = s.addValue) }
             }
             Spacer(Modifier.height(10.dp))
+            val miniValues = row.entries.take(miniPoints).reversed().map { it.value }
             LineChart(
-                values = row.entries.take(miniPoints).reversed().map { it.value },
+                values = miniValues,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 strokeWidth = 4f,
                 showPoints = false,
+                range = chartRange(row.tracker.type, miniValues),
+                smooth = smoothCharts,
             )
         }
     }
@@ -380,6 +459,63 @@ fun EditTrackerScreen(
         }
     }
 
+    // При создании трекера сна предлагаем перенести уже накопленные ночи из истории.
+    var importCandidates by remember { mutableStateOf<List<Pair<Long, Long>>>(emptyList()) }
+    LaunchedEffect(type, trackerId) {
+        if (type == TrackerType.SLEEP) importCandidates = vm.sleepHistoryCandidates()
+    }
+    if (importCandidates.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { importCandidates = emptyList() },
+            title = { Text(s.importFromHistoryTitle) },
+            text = { Text(s.importFromHistoryBody(importCandidates.size)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val nights = importCandidates
+                    importCandidates = emptyList()
+                    // Трекер мог ещё не существовать — сохраняем и импортируем в него.
+                    vm.saveTracker(
+                        Tracker(
+                            id = trackerId,
+                            type = type,
+                            askTimes = askTimes.ifEmpty { listOf(600) }.joinToString(","),
+                            startEpochDay = startDay,
+                            remindEnabled = remind,
+                            heightCm = heightText.toIntOrNull()?.coerceIn(50, 250) ?: 0,
+                            sex = sex,
+                        ),
+                    ) { id -> vm.importSleepHistory(id, nights) }
+                }) { Text(s.importBtn) }
+            },
+            dismissButton = { TextButton(onClick = { importCandidates = emptyList() }) { Text(s.later) } },
+        )
+    }
+
+    // Удаление трекера уносит с собой все записи, поэтому спрашиваем подтверждение.
+    var confirmDeleteTracker by remember { mutableStateOf(false) }
+    if (confirmDeleteTracker) {
+        ConfirmDeleteDialog(
+            title = trackerDisplayName(type),
+            onConfirm = { vm.deleteTracker(trackerId) { onDone() } },
+            onDismiss = { confirmDeleteTracker = false },
+        )
+    }
+
+    // Тап по чипу времени открывает правку: раньше 10:00 нельзя было изменить.
+    var editAskIndex by remember { mutableStateOf<Int?>(null) }
+    editAskIndex?.let { idx ->
+        val cur = askTimes.getOrElse(idx) { 600 }
+        TimeWheelDialog(
+            initial = LocalTime.of(cur / 60, cur % 60),
+            onPick = { t ->
+                askTimes = askTimes.toMutableList()
+                    .also { list -> list[idx] = t.hour * 60 + t.minute }
+                    .distinct().sorted()
+            },
+            onDismiss = { editAskIndex = null },
+        )
+    }
+
     if (showTimePicker) {
         TimeWheelDialog(
             initial = LocalTime.of(9, 0),
@@ -399,12 +535,12 @@ fun EditTrackerScreen(
                     IconButton(onClick = onDone) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back) }
                 },
                 actions = {
-                    if (!isNew) TextButton(onClick = { vm.deleteTracker(trackerId) { onDone() } }) { Text(s.delete) }
+                    if (!isNew) TextButton(onClick = { confirmDeleteTracker = true }) { Text(s.delete) }
                 },
             )
         },
         bottomBar = {
-            Row(Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(Modifier.fillMaxWidth().imePadding().padding(16.dp)) {
                 Button(
                     onClick = {
                         vm.saveTracker(
@@ -431,47 +567,142 @@ fun EditTrackerScreen(
         ) {
             Spacer(Modifier.height(8.dp))
             if (type == TrackerType.WEIGHT) {
-                OutlinedTextField(
-                    value = heightText,
-                    onValueChange = { heightText = it.filter { c -> c.isDigit() } },
-                    label = { Text(s.heightLabel) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    colors = fieldColors(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(s.sexLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = sex == "m", onClick = { sex = "m" }, label = { Text(s.sexM) })
-                    FilterChip(selected = sex == "f", onClick = { sex = "f" }, label = { Text(s.sexF) })
+                TrackerSection(s.trackerBodySection) {
+                    Text(s.heightSubsection, style = MaterialTheme.typography.titleSmall)
+                    OutlinedTextField(
+                        value = heightText,
+                        onValueChange = { heightText = it.filter { c -> c.isDigit() } },
+                        label = { Text(s.heightFieldLabel) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        colors = fieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    HorizontalDivider()
+                    Text(s.sexSubsection, style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = sex == "m", onClick = { sex = "m" }, label = { Text(s.sexM) })
+                        FilterChip(selected = sex == "f", onClick = { sex = "f" }, label = { Text(s.sexF) })
+                    }
                 }
             }
 
-            Text(s.askTimesLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                askTimes.forEach { m ->
-                    InputChip(
-                        selected = false,
-                        onClick = { if (askTimes.size > 1) askTimes = askTimes - m },
-                        label = { Text(hhmm(m)) },
-                        trailingIcon = {
-                            if (askTimes.size > 1) Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                        },
-                    )
+            // Сначала «нужны ли напоминания», и только потом — когда именно.
+            TrackerSection(s.trackerRemindSection) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(s.remindSwitch, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).padding(end = 12.dp))
+                    Switch(checked = remind, onCheckedChange = { remind = it })
                 }
-            }
-            if (askTimes.size < MAX_ASK_TIMES) {
-                OutlinedButton(onClick = { showTimePicker = true }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(s.addTime)
+                if (type == TrackerType.SLEEP) {
+                    HorizontalDivider()
+                    // Настройка про сон живёт рядом с трекером сна, а не во «Внешнем виде».
+                    val ctx = LocalContext.current
+                    var askSleep by remember { mutableStateOf(Settings(ctx).askSleepOnWake) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(s.askSleepTitle, style = MaterialTheme.typography.bodyMedium)
+                            Text(s.askSleepBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = askSleep,
+                            onCheckedChange = {
+                                askSleep = it
+                                Settings(ctx).askSleepOnWake = it
+                            },
+                        )
+                    }
                 }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(s.remindSwitch, modifier = Modifier.weight(1f).padding(end = 12.dp))
-                Switch(checked = remind, onCheckedChange = { remind = it })
+                if (remind) {
+                    HorizontalDivider()
+                    Text(s.trackerTimesSection, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (askTimes.isEmpty()) {
+                        Text(s.trackerNoTimes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    // Выбранные времена: подсвечены и с явной кнопкой удаления.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        askTimes.forEachIndexed { i, m ->
+                            InputChip(
+                                selected = true,
+                                onClick = { editAskIndex = i },
+                                label = { Text(hhmm(m), maxLines = 1, softWrap = false) },
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = { askTimes = askTimes - m },
+                                        modifier = Modifier.size(22.dp),
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = Lang.s.delete, modifier = Modifier.size(15.dp))
+                                    }
+                                },
+                            )
+                        }
+                    }
+                    if (askTimes.size < MAX_ASK_TIMES) {
+                        Text(s.trackerPresetsLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // Пресеты именно добавляют время, поэтому это кнопки-подсказки, а не «выбор».
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(8 * 60, 12 * 60, 20 * 60, 22 * 60).filter { it !in askTimes }.forEach { m ->
+                                AssistChip(
+                                    onClick = { askTimes = (askTimes + m).distinct().sorted().take(MAX_ASK_TIMES) },
+                                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                    label = { Text(hhmm(m), maxLines = 1, softWrap = false) },
+                                )
+                            }
+                            AssistChip(
+                                onClick = { showTimePicker = true },
+                                leadingIcon = { Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                label = { Text(s.trackerAddOwnTime, maxLines = 1, softWrap = false) },
+                            )
+                        }
+                    }
+                }
             }
             Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/**
+ * Совет «когда ложиться»: берём ночи со временем и оценкой не ниже средней и усредняем
+ * моменты по кругу суток — иначе 23:40 и 00:20 дали бы «12:00».
+ */
+fun sleepAdvice(entries: List<TrackerEntry>): Triple<Int, Int, Int>? {
+    val nights = entries.filter { it.sleepStart != null && it.sleepEnd != null && it.value > 0 }
+    if (nights.size < SLEEP_ADVICE_MIN) return null
+    val avg = nights.map { it.value }.average()
+    val good = nights.filter { it.value >= avg }.ifEmpty { nights }
+
+    fun circularMean(minutes: List<Int>): Int {
+        var x = 0.0
+        var y = 0.0
+        minutes.forEach { m ->
+            val a = m / (24.0 * 60) * 2 * Math.PI
+            x += kotlin.math.cos(a)
+            y += kotlin.math.sin(a)
+        }
+        val angle = kotlin.math.atan2(y / minutes.size, x / minutes.size)
+        val raw = (angle / (2 * Math.PI) * 24 * 60).toInt()
+        return ((raw % 1440) + 1440) % 1440
+    }
+
+    fun minutesOfDay(millis: Long): Int =
+        Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalTime().let { it.hour * 60 + it.minute }
+
+    val bed = circularMean(good.mapNotNull { it.sleepStart?.let(::minutesOfDay) })
+    val wake = circularMean(good.mapNotNull { it.sleepEnd?.let(::minutesOfDay) })
+    val duration = good.map { ((it.sleepEnd!! - it.sleepStart!!) / 60_000L).toInt() }.average().toInt()
+    return Triple(bed, wake, duration)
+}
+
+/** Сколько ночей нужно, чтобы совет имел смысл. */
+const val SLEEP_ADVICE_MIN = 4
+
+/** Блок настроек трекера: серая карточка с заголовком — как в мастере таблетки. */
+@Composable
+private fun TrackerSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            content()
         }
     }
 }
@@ -504,6 +735,32 @@ fun TrackerDetailScreen(
     var showBmiTable by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
     var deleteEntry by remember { mutableStateOf<TrackerEntry?>(null) }
+    // Записи, собранные кнопками, приходят без оценки — её можно поставить позже.
+    var rateEntry by remember { mutableStateOf<TrackerEntry?>(null) }
+    val smoothCharts = Settings(LocalContext.current).chartSmooth
+    rateEntry?.let { entry ->
+        var sleepRating by remember(entry.id) { mutableIntStateOf(4) }
+        var wakeRating by remember(entry.id) { mutableIntStateOf(4) }
+        AlertDialog(
+            onDismissRequest = { rateEntry = null },
+            title = { Text(s.sleepRateTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(s.sleepQualityLabel, style = MaterialTheme.typography.titleSmall)
+                    EmojiRating(sleepRating) { sleepRating = it }
+                    Text(s.sleepWakeQuality, style = MaterialTheme.typography.titleSmall)
+                    EmojiRating(wakeRating) { wakeRating = it }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.addTrackerEntry(entry.copy(value = sleepRating.toDouble(), wakeValue = wakeRating.toDouble()))
+                    rateEntry = null
+                }) { Text(s.save) }
+            },
+            dismissButton = { TextButton(onClick = { rateEntry = null }) { Text(s.cancel) } },
+        )
+    }
 
     val shown = row.entries.take(window).reversed()
     val values = shown.map { it.value }
@@ -572,64 +829,116 @@ fun TrackerDetailScreen(
             item(key = "chart") {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
+                        // Сколько записей показывать — компактной кнопкой прямо над графиком.
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                trackerDisplayName(tracker.type),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Box {
+                                TextButton(onClick = { windowMenu = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                                    Text(
+                                        s.chartPointsLabel + ": " + (if (window == Int.MAX_VALUE) s.windowAll else window.toString()),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                                }
+                                DropdownMenu(expanded = windowMenu, onDismissRequest = { windowMenu = false }) {
+                                    WINDOW_OPTIONS.forEach { n ->
+                                        DropdownMenuItem(
+                                            text = { Text(n.toString()) },
+                                            onClick = {
+                                                window = n
+                                                windowMenu = false
+                                            },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(s.windowAll) },
+                                        onClick = {
+                                            window = Int.MAX_VALUE
+                                            windowMenu = false
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(s.windowOther) },
+                                        onClick = {
+                                            windowMenu = false
+                                            customText = ""
+                                            customDialog = true
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             StatChip(s.minLabel, values.minOrNull()?.let { trimNum(it) } ?: "—", Modifier.weight(1f))
                             StatChip(s.maxLabel, values.maxOrNull()?.let { trimNum(it) } ?: "—", Modifier.weight(1f))
                             StatChip(s.avgLabel, if (values.isEmpty()) "—" else trimNum(values.average()), Modifier.weight(1f))
                         }
                         Spacer(Modifier.height(12.dp))
+                        val wakeValues = if (tracker.type == TrackerType.SLEEP) {
+                            shown.map { it.wakeValue ?: 0.0 }
+                        } else {
+                            emptyList()
+                        }
                         LineChart(
                             values = values,
+                            extraValues = if (wakeValues.any { it > 0.0 }) wakeValues else emptyList(),
+                            extraColor = MaterialTheme.colorScheme.tertiary,
+                            range = chartRange(tracker.type, values),
+                            smooth = smoothCharts,
                             xLabels = shown.map { shortDate(it.atMillis) },
+                            hollowPoints = shown.withIndex().filter { it.value.auto }.map { it.index }.toSet(),
                             modifier = Modifier.fillMaxWidth().height(220.dp),
                             showGrid = true,
                         )
+                        if (tracker.type == TrackerType.SLEEP && wakeValues.any { it > 0.0 }) {
+                            Spacer(Modifier.height(6.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                LegendDot(MaterialTheme.colorScheme.primary, s.sleepQualityLabel)
+                                LegendDot(MaterialTheme.colorScheme.tertiary, s.wakeRatingLine)
+                            }
+                        }
                         if (values.size < 2) {
                             Spacer(Modifier.height(6.dp))
-                            Text(s.notEnoughData, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(s.notEnoughData, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
             }
 
-            item(key = "window") {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        ExposedDropdownMenuBox(expanded = windowMenu, onExpandedChange = { windowMenu = it }) {
-                            OutlinedTextField(
-                                value = window.toString(),
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text(s.windowLabel) },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = windowMenu) },
-                                colors = fieldColors(),
-                                modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                            )
-                            ExposedDropdownMenu(expanded = windowMenu, onDismissRequest = { windowMenu = false }) {
-                                WINDOW_OPTIONS.forEach { n ->
-                                    DropdownMenuItem(
-                                        text = { Text(n.toString()) },
-                                        onClick = {
-                                            window = n
-                                            windowMenu = false
-                                        },
-                                    )
-                                }
-                                DropdownMenuItem(
-                                    text = { Text(s.windowAll) },
-                                    onClick = {
-                                        window = Int.MAX_VALUE
-                                        windowMenu = false
-                                    },
+            if (tracker.type == TrackerType.SLEEP) {
+                item(key = "sleep-advice") {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(s.sleepAdviceTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                            val advice = sleepAdvice(row.entries)
+                            if (advice == null) {
+                                val have = row.entries.count { it.sleepStart != null && it.sleepEnd != null && it.value > 0 }
+                                Text(
+                                    s.sleepAdviceNeedMore((SLEEP_ADVICE_MIN - have).coerceAtLeast(1)),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                // «Другое…» открывает окно ввода своего числа.
-                                DropdownMenuItem(
-                                    text = { Text(s.windowOther) },
-                                    onClick = {
-                                        windowMenu = false
-                                        customText = ""
-                                        customDialog = true
-                                    },
+                            } else {
+                                Text(
+                                    s.sleepAdvice(hhmm(advice.first), hhmm(advice.second), s.duration(advice.third)),
+                                    style = MaterialTheme.typography.bodyMedium,
                                 )
                             }
                         }
@@ -641,7 +950,11 @@ fun TrackerDetailScreen(
                 item(key = "bmi") {
                     val lastWeight = row.entries.firstOrNull()?.value
                     Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp)) {
+                        // Сверху отступ меньше: кнопка «Таблица ИМТ» уже даёт свой внутренний паддинг.
+                        Column(
+                            Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(s.bmiTitle, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                                 TextButton(onClick = { showBmiTable = true }) { Text(s.bmiTable, maxLines = 1, softWrap = false) }
@@ -685,10 +998,25 @@ fun TrackerDetailScreen(
                     Text(s.logTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 6.dp))
                 }
                 items(row.entries, key = { it.id }) { entry ->
-                    EntryRow(tracker = tracker, entry = entry, onLongPress = { deleteEntry = it })
+                    EntryRow(
+                        tracker = tracker,
+                        entry = entry,
+                        onLongPress = { deleteEntry = it },
+                        onRate = { rateEntry = it },
+                    )
                 }
             }
         }
+    }
+}
+
+/** Точка легенды с подписью: две линии на графике сна надо как-то различать. */
+@Composable
+private fun LegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).background(color, RoundedCornerShape(4.dp)))
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -704,15 +1032,22 @@ private fun StatChip(label: String, value: String, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun EntryRow(tracker: Tracker, entry: TrackerEntry, onLongPress: (TrackerEntry) -> Unit) {
+private fun EntryRow(
+    tracker: Tracker,
+    entry: TrackerEntry,
+    onLongPress: (TrackerEntry) -> Unit,
+    onRate: (TrackerEntry) -> Unit = {},
+) {
     val s = Lang.s
     Card(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { onLongPress(entry) })) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    when (tracker.type) {
-                        TrackerType.WEIGHT -> trimNum(entry.value)
-                        else -> MOOD_EMOJI.getOrElse(entry.value.toInt() - 1) { "•" } + " " + entry.value.toInt() + "/5"
+                    when {
+                        tracker.type == TrackerType.WEIGHT -> trimNum(entry.value)
+                        entry.value <= 0.0 -> "—"
+                        else -> MOOD_EMOJI.getOrElse(entry.value.toInt() - 1) { "•" } + " " + entry.value.toInt() + "/5" +
+                            (entry.wakeValue?.let { " · " + s.sleepWakeQuality.lowercase() + " " + it.toInt() + "/5" } ?: "")
                     },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
@@ -732,6 +1067,18 @@ private fun EntryRow(tracker: Tracker, entry: TrackerEntry, onLongPress: (Tracke
             } else if (tracker.type == TrackerType.SLEEP && entry.awakenings > 0) {
                 Spacer(Modifier.height(4.dp))
                 Text("↑" + entry.awakenings, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (entry.auto) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(s.sleepAutoBadge, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (entry.value <= 0.0) {
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = { onRate(entry) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                            Text(s.sleepRateBtn, maxLines = 1, softWrap = false)
+                        }
+                    }
+                }
             }
             if (entry.tags.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
@@ -786,6 +1133,7 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
     var sleepStartTime by remember { mutableStateOf(LocalTime.of(23, 0)) }
     var sleepEndTime by remember { mutableStateOf(LocalTime.of(7, 0)) }
     var awakeningsText by remember { mutableStateOf("0") }
+    var wakeRating by remember { mutableIntStateOf(4) }
     var tags by remember { mutableStateOf(setOf<String>()) }
     var showSleepStartPicker by remember { mutableStateOf(false) }
     var showSleepEndPicker by remember { mutableStateOf(false) }
@@ -831,6 +1179,7 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
                     sleepEnd = end,
                     awakenings = (awakeningsText.toIntOrNull() ?: 0).coerceIn(0, 50),
                     tags = tags.joinToString(", "),
+                    wakeValue = wakeRating.toDouble(),
                 )
             }
         }
@@ -858,6 +1207,8 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
                     else -> {
                         Text(s.sleepQualityLabel, style = MaterialTheme.typography.titleSmall)
                         EmojiRating(rating) { rating = it }
+                        Text(s.sleepWakeQuality, style = MaterialTheme.typography.titleSmall)
+                        EmojiRating(wakeRating) { wakeRating = it }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(s.sleepTimesSwitch, modifier = Modifier.weight(1f).padding(end = 12.dp), style = MaterialTheme.typography.bodyMedium)
                             Switch(checked = withTimes, onCheckedChange = { withTimes = it })
@@ -936,7 +1287,7 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
 }
 
 @Composable
-private fun EmojiRating(rating: Int, onPick: (Int) -> Unit) {
+fun EmojiRating(rating: Int, onPick: (Int) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         MOOD_EMOJI.forEachIndexed { index, emoji ->
             val value = index + 1

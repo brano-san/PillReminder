@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 class Converters {
     @TypeConverter
@@ -27,8 +28,9 @@ class Converters {
         MedLibraryEntry::class,
         Tracker::class,
         TrackerEntry::class,
+        MealEvent::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -41,13 +43,42 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun visitDao(): VisitDao
     abstract fun libraryDao(): LibraryDao
     abstract fun trackerDao(): TrackerDao
+    abstract fun mealDao(): MealDao
 
     companion object {
         @Volatile
         private var instance: AppDatabase? = null
 
         /** Миграции между версиями схемы; для 1 → 2 добавить `object : Migration(1, 2) { ... }`. */
-        val MIGRATIONS: Array<Migration> = emptyArray()
+        /**
+         * 1 → 2: релиз 1.1. Всё, что появилось после 1.0, одной миграцией — расписание «по часам»,
+         * еда, раздельная оценка сна, автозаписи сна, теги и привязка заметок, поля каталога,
+         * отход ко сну и исходное время приёма. МИГРАЦИЯ ЗАФИКСИРОВАНА: 1.1 выпущена,
+         * дальнейшие изменения схемы — только новой Migration(2, 3) и version = 3.
+         */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE medications ADD COLUMN fixedTimes TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE medications ADD COLUMN afterMealMinutes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE medications ADD COLUMN apartFromOthersMinutes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE medications ADD COLUMN apartFromMedIds TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE medications ADD COLUMN beforeMealMinutes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE wake_events ADD COLUMN bedAt INTEGER")
+                db.execSQL("ALTER TABLE doses ADD COLUMN baseAt INTEGER")
+                db.execSQL("ALTER TABLE tracker_entries ADD COLUMN wakeValue REAL")
+                db.execSQL("ALTER TABLE tracker_entries ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE notes ADD COLUMN medId INTEGER")
+                db.execSQL("ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE med_library ADD COLUMN form TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE med_library ADD COLUMN doseInfo TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `meals` " +
+                        "(`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `atMillis` INTEGER NOT NULL)",
+                )
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
@@ -58,6 +89,8 @@ abstract class AppDatabase : RoomDatabase() {
                 // Релиз 1.0: схема зафиксирована. Любое изменение сущностей = version++ и явная
                 // Migration в MIGRATIONS, иначе Room упадёт при старте (данные пользователя терять нельзя).
                 .addMigrations(*MIGRATIONS)
+                // На тестовых сборках схема успела побывать «выше» — откат не должен ронять приложение.
+                .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
                 .also { instance = it }
         }

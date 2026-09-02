@@ -19,7 +19,8 @@ object Report {
     const val SEC_TRACKERS = "trackers"
     const val SEC_NOTES = "notes"
     const val SEC_VISITS = "visits"
-    val ALL_SECTIONS = setOf(SEC_INTAKES, SEC_MEDS, SEC_TRACKERS, SEC_NOTES, SEC_VISITS)
+    const val SEC_LINKS = "links"
+    val ALL_SECTIONS = setOf(SEC_INTAKES, SEC_MEDS, SEC_TRACKERS, SEC_NOTES, SEC_VISITS, SEC_LINKS)
 
     private fun header(sb: StringBuilder, title: String) {
         sb.appendLine()
@@ -124,6 +125,12 @@ object Report {
                 }
             }
 
+            if (SEC_LINKS in sections) {
+                header(this, s.corrReportSection)
+                val lines = correlationLines(db, fromDay, toDay, s)
+                if (lines.isEmpty()) appendLine(s.repNoData) else lines.forEach { appendLine(it) }
+            }
+
             if (SEC_VISITS in sections) {
                 header(this, s.repVisits)
                 val visits = db.visitDao().getAll().filter { it.atMillis >= fromMillis }
@@ -135,6 +142,73 @@ object Report {
                 }
             }
         }
+    }
+
+    /**
+     * Парные корреляции между сериями (вес, настроение, качество сна, часы сна, дисциплина).
+     * Считаем по дням, где есть обе величины; меньше трёх общих дней — связь не показываем.
+     */
+    private suspend fun correlationLines(db: AppDatabase, fromDay: Long, toDay: Long, s: S): List<String> {
+        val days = (fromDay..toDay).toList()
+        val trackers = db.trackerDao().getAll()
+        val entries = db.trackerDao().getAllEntries()
+
+        fun trackerSeries(type: String, sleepHours: Boolean = false): List<Double?> {
+            val tracker = trackers.firstOrNull { it.type == type } ?: return days.map { null }
+            val byDay = entries.filter { it.trackerId == tracker.id }.groupBy { epochDayOf(it.atMillis) }
+            return days.map { day ->
+                val list = byDay[day].orEmpty()
+                when {
+                    list.isEmpty() -> null
+                    sleepHours -> list.mapNotNull { e ->
+                        if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
+                    }.takeIf { it.isNotEmpty() }?.average()
+                    else -> list.map { it.value }.average()
+                }
+            }
+        }
+
+        val doses = db.doseDao().getAll().filter { it.dayEpochDay in fromDay..toDay }.groupBy { it.dayEpochDay }
+        val adherence = days.map { day ->
+            val list = doses[day].orEmpty()
+            if (list.isEmpty()) null else list.count { it.status == DoseStatus.TAKEN } * 100.0 / list.size
+        }
+
+        val series = listOf(
+            s.trackerWeight to trackerSeries(TrackerType.WEIGHT),
+            s.trackerMood to trackerSeries(TrackerType.MOOD),
+            s.trackerSleep to trackerSeries(TrackerType.SLEEP),
+            s.seriesSleepHours to trackerSeries(TrackerType.SLEEP, sleepHours = true),
+            s.seriesAdherence to adherence,
+        ).filter { (_, values) -> values.count { it != null } >= 3 }
+
+        val out = mutableListOf<String>()
+        for (i in series.indices) {
+            for (j in i + 1 until series.size) {
+                val r = pearson(series[i].second, series[j].second) ?: continue
+                out += "• " + series[i].first + " × " + series[j].first + ": r = " + String.format(Locale.ROOT, "%.2f", r)
+            }
+        }
+        return out
+    }
+
+    /** Коэффициент Пирсона по дням, где есть обе величины. */
+    private fun pearson(a: List<Double?>, b: List<Double?>): Double? {
+        val pairs = a.zip(b).mapNotNull { (x, y) -> if (x != null && y != null) x to y else null }
+        if (pairs.size < 3) return null
+        val n = pairs.size
+        val mx = pairs.sumOf { it.first } / n
+        val my = pairs.sumOf { it.second } / n
+        var cov = 0.0
+        var vx = 0.0
+        var vy = 0.0
+        for ((x, y) in pairs) {
+            cov += (x - mx) * (y - my)
+            vx += (x - mx) * (x - mx)
+            vy += (y - my) * (y - my)
+        }
+        if (vx == 0.0 || vy == 0.0) return null
+        return cov / kotlin.math.sqrt(vx * vy)
     }
 
     /** Тот же текст в PDF: А4, переносы строк, разбивка на страницы, заголовки жирным. */
