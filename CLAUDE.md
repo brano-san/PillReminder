@@ -45,8 +45,8 @@
 
 ## База данных
 
-- Схема v4 (1.2.1, не выпущена): **`MIGRATION_1_2` и `MIGRATION_2_3` зафиксированы**, `MIGRATION_3_4`
-  (`visits.place`, `visits.remind`) пока дописывается. После выпуска 1.2.1 — `version = 5` + `Migration(4, 5)`.
+- Схема v4, релиз 1.2.1 выпущен 13.09.2026 — **`MIGRATION_1_2`, `MIGRATION_2_3` и `MIGRATION_3_4` зафиксированы**.
+  Любое новое поле = `version = 5` + отдельная `Migration(4, 5)`; дописывать в 3 → 4 больше нельзя.
   `fallbackToDestructiveMigrationOnDowngrade` оставлен.
 - **Релиз 1.0 выпущен, схема v1 зафиксирована.** Destructive-фолбэков нет: любое изменение
   entity = `version++` в `@Database` + явная `Migration(from, to)` в `AppDatabase.MIGRATIONS`
