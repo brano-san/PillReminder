@@ -180,6 +180,10 @@ data class DoctorVisit(
     val title: String,
     val comment: String = "",
     val atMillis: Long,
+    /** Адрес клиники или кабинет — виден на карточке и в уведомлении. */
+    val place: String = "",
+    /** Напоминать об этом визите (сроки — общие, из настроек); false — визит только в списке. */
+    val remind: Boolean = true,
 )
 
 /** Запись каталога лекарств: что пил раньше, на что влияло, как переносилось. */

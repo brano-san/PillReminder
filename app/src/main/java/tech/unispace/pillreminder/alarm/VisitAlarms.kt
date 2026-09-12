@@ -21,6 +21,13 @@ import java.time.format.DateTimeFormatter
 /** Пресеты смещений напоминаний о визите, в минутах; пользователь может добавить свои. */
 val VISIT_OFFSET_PRESETS = listOf(10080, 4320, 2880, 1440, 720, 180, 60)
 
+/**
+ * Моменты напоминаний о визите по выбранным смещениям — только будущие, по убыванию заблаговременности.
+ * Чистая функция: экран визита показывает этот же список, чтобы было ясно, когда именно придёт уведомление.
+ */
+fun visitReminderMoments(visitAt: Long, offsetsMinutes: Collection<Int>, now: Long): List<Long> =
+    offsetsMinutes.map { visitAt - it * 60_000L }.filter { it > now }.distinct().sorted()
+
 /** Будильники на визиты к врачу: за N часов/дней — что выбрано в настройках. */
 object VisitAlarms {
 
@@ -57,6 +64,8 @@ object VisitAlarms {
 
         for (visit in db.visitDao().getAll()) {
             for (offset in toCancel) alarmManager.cancel(intentFor(context, visit.id, offset))
+            // Напоминание выключено у самого визита — он остаётся в списке, но будильников не получает.
+            if (!visit.remind) continue
             var scheduled = false
             for (offset in enabled) {
                 val at = visit.atMillis - offset * 60_000L
@@ -88,10 +97,11 @@ class VisitReceiver : BroadcastReceiver() {
                 val dateFmt = DateTimeFormatter.ofPattern("d MMMM", Lang.s.locale)
                 val date = Instant.ofEpochMilli(visit.atMillis)
                     .atZone(ZoneId.systemDefault()).toLocalDate().format(dateFmt)
+                // Адрес или кабинет — в тексте: перед выходом он нужнее всего.
                 Notifications.showVisit(
                     app,
                     visitId,
-                    visit.title,
+                    listOf(visit.title, visit.place).filter { it.isNotBlank() }.joinToString(" · "),
                     date + ", " + formatClock(visit.atMillis),
                 )
             } finally {

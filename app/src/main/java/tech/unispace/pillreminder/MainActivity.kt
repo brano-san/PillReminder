@@ -87,6 +87,7 @@ import tech.unispace.pillreminder.ui.TipsScreen
 import tech.unispace.pillreminder.ui.TrackerDetailScreen
 import tech.unispace.pillreminder.ui.TrackersScreen
 import tech.unispace.pillreminder.ui.VisitReminderSettingsScreen
+import tech.unispace.pillreminder.ui.WidgetSettingsScreen
 import tech.unispace.pillreminder.ui.theme.PillTheme
 
 class MainActivity : FragmentActivity() {
@@ -184,6 +185,7 @@ private const val ROUTE_SETUP_STOCK = "setup/stock"
 private const val ROUTE_SETUP_CHARTS = "setup/charts"
 private const val ROUTE_SETUP_BACKUP = "setup/backup"
 private const val ROUTE_SETUP_REPORT = "setup/report"
+private const val ROUTE_SETUP_WIDGET = "setup/widget"
 
 @Composable
 private fun AppRoot() {
@@ -248,6 +250,7 @@ private fun AppRoot() {
                     onTakeNow = { medId, done -> vm.takeNow(medId, done) },
                     onDeleteIntake = { vm.deleteIntake(it) },
                     onSkip = { vm.skip(it) },
+                    onSnooze = { doseId, minutes -> vm.snooze(doseId, minutes) },
                     onEdit = { nav.navigate("edit/" + it) },
                     onAdd = { nav.navigate("edit/0") },
                     onDelete = { vm.delete(it) },
@@ -294,7 +297,6 @@ private fun AppRoot() {
                     rows = trackerRows,
                     onOpen = { nav.navigate("tracker/" + it) },
                     onCreate = { type -> nav.navigate("trackerEdit/0/" + type) },
-                    onCreateAll = { types -> vm.createTrackers(types) },
                     onAddEntry = { vm.addTrackerEntry(it) },
                     onOpenCorrelations = { nav.navigate(ROUTE_CORRELATIONS) },
                     contentPadding = tabPadding,
@@ -332,8 +334,10 @@ private fun AppRoot() {
                     onOpenBackup = { nav.navigate(ROUTE_SETUP_BACKUP) },
                     onOpenReport = { nav.navigate(ROUTE_SETUP_REPORT) },
                     onOpenTutorial = { nav.navigate(ROUTE_ONBOARDING) },
+                    onOpenWidget = { nav.navigate(ROUTE_SETUP_WIDGET) },
                 )
             }
+            composable(ROUTE_SETUP_WIDGET) { WidgetSettingsScreen(onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_REPEATS) { RepeatSettingsScreen(onBack = { nav.popBackStack() }, vm = vm) }
             composable(ROUTE_SETUP_SOUND) { SoundSettingsScreen(onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_DELIVERY) { DeliverySettingsScreen(onBack = { nav.popBackStack() }) }
@@ -373,7 +377,12 @@ private fun AppRoot() {
                 EditNoteScreen(vm = vm, noteId = entry.arguments?.getLong("noteId") ?: 0L, onDone = { nav.popBackStack() })
             }
             composable(ROUTE_VISIT_EDIT, arguments = listOf(navArgument("visitId") { type = NavType.LongType })) { entry ->
-                EditVisitScreen(vm = vm, visitId = entry.arguments?.getLong("visitId") ?: 0L, onDone = { nav.popBackStack() })
+                EditVisitScreen(
+                    vm = vm,
+                    visitId = entry.arguments?.getLong("visitId") ?: 0L,
+                    onOpenReminderSettings = { nav.navigate(ROUTE_SETUP_VISITS) },
+                    onDone = { nav.popBackStack() },
+                )
             }
             composable(ROUTE_LIB_EDIT, arguments = listOf(navArgument("entryId") { type = NavType.LongType })) { entry ->
                 EditLibraryScreen(vm = vm, entryId = entry.arguments?.getLong("entryId") ?: 0L, onDone = { nav.popBackStack() })

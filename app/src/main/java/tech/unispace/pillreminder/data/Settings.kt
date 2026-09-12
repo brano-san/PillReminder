@@ -230,9 +230,13 @@ class Settings(context: Context) {
         get() = prefs.getInt(KEY_WIDGET_OPACITY, 100)
         set(value) = prefs.edit().putInt(KEY_WIDGET_OPACITY, value.coerceIn(0, 100)).apply()
 
-    /** Цвет текста виджета: [WidgetStyle.TEXT_AUTO] (по яркости фона), [WidgetStyle.TEXT_LIGHT], [WidgetStyle.TEXT_DARK]. */
+    /**
+     * Цвет текста виджета: [WidgetStyle.TEXT_LIGHT] или [WidgetStyle.TEXT_DARK]. Режима «авто» с 1.2.1 нет —
+     * он гадал по цвету пресета, а не по обоям; старое сохранённое «auto» читается как режим по яркости фона.
+     */
     var widgetText: String
-        get() = prefs.getString(KEY_WIDGET_TEXT, WidgetStyle.TEXT_AUTO) ?: WidgetStyle.TEXT_AUTO
+        get() = prefs.getString(KEY_WIDGET_TEXT, null)?.takeIf { it == WidgetStyle.TEXT_LIGHT || it == WidgetStyle.TEXT_DARK }
+            ?: WidgetStyle.textModeFor(widgetColor)
         set(value) = prefs.edit().putString(KEY_WIDGET_TEXT, value).apply()
 
     private companion object {

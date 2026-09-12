@@ -55,11 +55,11 @@ class PillWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
-        /** Один приём на виджете: строка «время · название · количество · дозировка», подстрока с условиями и флаг «ждёт еду». */
-        private data class WidgetLine(val main: String, val sub: String?, val gated: Boolean = false)
+        /** Один приём на виджете: строка «время · название · дозировка × количество», подстрока с условиями и флаг «ждёт еду». */
+        data class WidgetLine(val main: String, val sub: String?, val gated: Boolean = false)
 
         /** Содержимое виджета: строки, ближайший приём и можно ли отметить его кнопкой прямо сейчас. */
-        private data class WidgetData(
+        data class WidgetData(
             val lines: List<WidgetLine>,
             val nextDoseId: Long,
             /** Ближайший приём в пределах часа и не ждёт еду — кнопка отмечает его; иначе она открывает приложение. */
@@ -88,7 +88,7 @@ class PillWidgetProvider : AppWidgetProvider() {
             val settings = Settings(context)
             Lang.code = settings.language
             val s = Lang.s
-            val data = loadData(context)
+            val data = runBlocking { loadData(context) }
 
             val light = WidgetStyle.lightText(settings.widgetColor, settings.widgetText)
             val primaryText = WidgetStyle.textColor(primary = true, light = light)
@@ -174,8 +174,11 @@ class PillWidgetProvider : AppWidgetProvider() {
             views.setViewVisibility(viewId, if (text.isNullOrBlank()) View.GONE else View.VISIBLE)
         }
 
-        /** Виджет обновляется редко и запрос крошечный — блокировка допустима (из UI — через [refreshAsync]). */
-        private fun loadData(context: Context): WidgetData = runBlocking {
+        /**
+         * Содержимое виджета из базы. Из `refresh` зовётся под `runBlocking` (виджет обновляется редко, запрос крошечный);
+         * экран «Виджет» читает то же самое для предпросмотра — превью показывает реальные приёмы, а не пример.
+         */
+        suspend fun loadData(context: Context): WidgetData =
             withContext(Dispatchers.IO) {
                 val s = Lang.s
                 val db = AppDatabase.get(context)
@@ -211,11 +214,8 @@ class PillWidgetProvider : AppWidgetProvider() {
                     val med = medsById[dose.medId]
                     // Форма выпуска нужна, чтобы писать «2 капли», а не «2 таблетки».
                     val form = med?.form ?: "Таблетка"
-                    val main = buildString {
-                        append(formatClock(dose.plannedAt)).append("  ").append(dose.medNameSnapshot)
-                        append(" · ").append(s.pills(dose.amount, form))
-                        med?.doseInfo?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
-                    }
+                    // Дозировка и количество одной меткой, как на карточке: «10 мг × 2 таб.».
+                    val main = formatClock(dose.plannedAt) + "  " + dose.medNameSnapshot + " · " + s.amountFact(dose.amount, form, med?.doseInfo.orEmpty())
                     val isGated = gated(dose)
                     val sub = med?.let { m ->
                         listOfNotNull(
@@ -242,7 +242,6 @@ class PillWidgetProvider : AppWidgetProvider() {
                     progress = if (cycle != null && scheduled.isNotEmpty()) scheduled.count { it.status == DoseStatus.TAKEN } to scheduled.size else null,
                 )
             }
-        }
     }
 }
 

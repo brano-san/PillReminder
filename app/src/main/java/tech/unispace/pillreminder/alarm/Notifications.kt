@@ -193,6 +193,32 @@ object Notifications {
         }
     }
 
+    /**
+     * Мягкое напоминание о еде: приём «после еды» дождался планового времени, а кнопку «Еда» не нажали.
+     * Обычный канал, без цепочки повторов и без будильника — за забытую кнопку не наказываем звонком.
+     * Тот же id, что у приёма: «Еда» или отметка снимут его вместе с остальным.
+     */
+    fun showMealPrompt(context: Context, doseId: Long, title: String, text: String) {
+        val open = PendingIntent.getActivity(
+            context,
+            doseId.toInt(),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = NotificationCompat.Builder(context, defaultChannelId(context))
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .addAction(R.drawable.ic_pill, Lang.s.mealBtn, action(context, doseId, ActionReceiver.ACTION_MEAL, "meal"))
+            .addAction(R.drawable.ic_pill, Lang.s.took, action(context, doseId, ActionReceiver.ACTION_TAKEN, "taken"))
+        notifySafely(context, doseId.toInt(), builder)
+    }
+
     /** Одно уведомление на несколько приёмов, назначенных в одну минуту. */
     fun showGroup(
         context: Context,

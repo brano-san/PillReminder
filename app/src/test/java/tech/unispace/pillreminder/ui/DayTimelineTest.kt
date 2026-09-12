@@ -89,6 +89,38 @@ class DayTimelineTest {
     }
 
     @Test
+    fun dueWithinGraceIsAmberNotRed() {
+        val now = wake + hour + 30 * 60_000L
+        val node = buildTimelineNodes(wake, null, listOf(dose(1, wake + hour)), emptyMap(), emptyList(), now)
+            .single { it.kind == TimelineKind.PILL }
+        assertEquals(TimelineState.DUE, node.state)
+    }
+
+    @Test
+    fun snoozedDoseStaysPending() {
+        val now = wake + 2 * hour
+        val snoozed = dose(1, wake + hour).copy(remindAt = now + 30 * 60_000L, attempt = 0)
+        val repeating = dose(2, wake + hour).copy(remindAt = now + 3 * 60_000L, attempt = 2)
+        val pills = buildTimelineNodes(wake, null, listOf(snoozed, repeating), emptyMap(), emptyList(), now)
+            .filter { it.kind == TimelineKind.PILL }
+        assertEquals(TimelineState.PENDING, pills.first { it.at == snoozed.plannedAt && it.state == TimelineState.PENDING }.state)
+        assertEquals(1, pills.count { it.state == TimelineState.DUE })
+    }
+
+    @Test
+    fun pillLabelIsShortAndCarriesDose() {
+        assertEquals("Эсц 10мг", timelinePillLabel("Эсциталопрам", "10 мг"))
+        assertEquals("Магний", timelinePillLabel("Магний", ""))
+        assertEquals("Эсцита…", timelinePillLabel("Эсциталопрам", ""))
+        val node = buildTimelineNodes(
+            wake, null, listOf(dose(1, wake + hour, name = "Эсциталопрам")), emptyMap(), emptyList(), wake,
+            doseInfoById = mapOf(1L to "10 мг"),
+        ).single { it.kind == TimelineKind.PILL }
+        assertEquals("Эсц 10мг", node.label)
+        assertEquals(1L, node.medId)
+    }
+
+    @Test
     fun noWakeMeansNoWakeNode() {
         val nodes = buildTimelineNodes(null, null, listOf(dose(1, wake + hour)), emptyMap(), listOf(wake + 2 * hour), wake)
         assertEquals(listOf(TimelineKind.PILL, TimelineKind.MEAL), nodes.map { it.kind })

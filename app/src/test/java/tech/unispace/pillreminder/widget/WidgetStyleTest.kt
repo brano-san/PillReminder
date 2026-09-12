@@ -7,7 +7,7 @@ import org.junit.Test
 import tech.unispace.pillreminder.ui.EN
 import tech.unispace.pillreminder.ui.RU
 
-/** Цвет текста по яркости фона и перевод процентов прозрачности в альфу. */
+/** Цвет текста по яркости фона, палитра и перевод процентов прозрачности в альфу. */
 class WidgetStyleTest {
 
     private val white = 0xFFFFFFFF.toInt()
@@ -15,13 +15,14 @@ class WidgetStyleTest {
 
     @Test
     fun whiteBackgroundNeedsDarkText() {
+        assertEquals(WidgetStyle.TEXT_DARK, WidgetStyle.textModeFor(white))
         assertFalse(WidgetStyle.lightText(white, WidgetStyle.TEXT_AUTO))
     }
 
     @Test
     fun tealBackgroundNeedsLightText() {
-        assertTrue(WidgetStyle.lightText(WidgetStyle.DEFAULT_COLOR, WidgetStyle.TEXT_AUTO))
-        assertTrue(WidgetStyle.lightText(black, WidgetStyle.TEXT_AUTO))
+        assertEquals(WidgetStyle.TEXT_LIGHT, WidgetStyle.textModeFor(WidgetStyle.DEFAULT_COLOR))
+        assertEquals(WidgetStyle.TEXT_LIGHT, WidgetStyle.textModeFor(black))
     }
 
     @Test
@@ -46,9 +47,11 @@ class WidgetStyleTest {
     }
 
     @Test
-    fun presetNamesMatchPresetsInBothLanguages() {
+    fun paletteNamesMatchPresetsInBothLanguages() {
         assertEquals(WidgetStyle.presets.size, RU.widgetColorNames.size)
         assertEquals(WidgetStyle.presets.size, EN.widgetColorNames.size)
         assertEquals(WidgetStyle.DEFAULT_COLOR, WidgetStyle.presets.first())
+        // Палитра без дублей: два одинаковых кружка выглядели бы как ошибка.
+        assertEquals(WidgetStyle.presets.size, WidgetStyle.presets.distinct().size)
     }
 }

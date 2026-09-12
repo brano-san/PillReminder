@@ -7,9 +7,7 @@ package tech.unispace.pillreminder.ui
 
 import android.app.Activity
 import android.app.NotificationManager
-import android.appwidget.AppWidgetManager
 import android.content.ActivityNotFoundException
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.RingtoneManager
@@ -25,24 +23,14 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Slider
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import kotlin.math.roundToInt
-import tech.unispace.pillreminder.widget.WidgetStyle
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -110,7 +98,6 @@ import tech.unispace.pillreminder.alarm.AlarmScheduler
 import tech.unispace.pillreminder.alarm.Notifications
 import tech.unispace.pillreminder.alarm.VISIT_OFFSET_PRESETS
 import tech.unispace.pillreminder.widget.PillWidgetProvider
-import tech.unispace.pillreminder.widget.PillWidgetWideProvider
 import tech.unispace.pillreminder.data.Settings as AppSettings
 import java.time.LocalTime
 
@@ -157,6 +144,7 @@ fun SettingsMenuScreen(
     onOpenBackup: () -> Unit,
     onOpenReport: () -> Unit,
     onOpenTutorial: () -> Unit,
+    onOpenWidget: () -> Unit,
 ) {
     val s = Lang.s
     val context = LocalContext.current
@@ -245,56 +233,13 @@ fun SettingsMenuScreen(
             onClick = onOpenTutorial,
         )
 
-        // Виджет: закрепление кнопкой прямо из меню.
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Widgets, contentDescription = null, tint = primary)
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(s.widgetCard, fontWeight = FontWeight.SemiBold)
-                        Text(s.widgetCardSub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                val manager = AppWidgetManager.getInstance(context)
-                var pickWidget by remember { mutableStateOf(false) }
-                if (pickWidget) {
-                    // Вариантов виджета два — даём выбрать, какой закрепить.
-                    AlertDialog(
-                        onDismissRequest = { pickWidget = false },
-                        title = { Text(s.pickWidgetTitle) },
-                        text = null,
-                        confirmButton = {
-                            TextButton(onClick = {
-                                pickWidget = false
-                                manager.requestPinAppWidget(ComponentName(context, PillWidgetWideProvider::class.java), null, null)
-                            }) { Text(s.widgetWideName, maxLines = 1, softWrap = false) }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = {
-                                pickWidget = false
-                                manager.requestPinAppWidget(ComponentName(context, PillWidgetProvider::class.java), null, null)
-                            }) { Text(s.widgetNarrowName, maxLines = 1, softWrap = false) }
-                        },
-                    )
-                }
-                if (manager.isRequestPinAppWidgetSupported) {
-                    FilledTonalButton(
-                        onClick = {
-                            pickWidget = true
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(s.widgetAdd, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
-                } else {
-                    Text(s.widgetUnsupported, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                // Стиль виджета живёт во «Внешнем виде» — даём ссылку, чтобы его не искали здесь.
-                TextButton(onClick = onOpenCharts, modifier = Modifier.fillMaxWidth()) {
-                    Text(s.widgetStyleLink, maxLines = 1, softWrap = false)
-                }
-            }
-        }
+        // Виджет — такой же пункт со стрелкой, как остальные; добавление и стиль живут на своём экране.
+        SettingsNavCard(
+            icon = { Icon(Icons.Default.Widgets, contentDescription = null, tint = primary) },
+            title = s.widgetCard,
+            subtitle = s.widgetCardSub,
+            onClick = onOpenWidget,
+        )
 
         // Язык — переключается на месте.
         Card(Modifier.fillMaxWidth()) {
@@ -367,7 +312,7 @@ fun SettingsMenuScreen(
 }
 
 @Composable
-private fun SettingsNavCard(
+internal fun SettingsNavCard(
     icon: @Composable () -> Unit,
     title: String,
     subtitle: String,
@@ -389,7 +334,7 @@ private fun SettingsNavCard(
 
 /** Каркас подэкрана настроек: шапка с «назад» и снекбар. */
 @Composable
-private fun SettingsSubScreen(
+internal fun SettingsSubScreen(
     title: String,
     onBack: () -> Unit,
     snackbars: SnackbarHostState,
@@ -1077,10 +1022,6 @@ fun ChartSettingsScreen(onBack: () -> Unit) {
     var homeActions by remember { mutableStateOf(settings.showHomeActions) }
     var timeline by remember { mutableStateOf(settings.showDayTimeline) }
     var smooth by remember { mutableStateOf(settings.chartSmooth) }
-    // Стиль виджета: каждое изменение сразу уходит на рабочий стол (в фоне — refresh читает базу).
-    var widgetColor by remember { mutableStateOf(settings.widgetColor) }
-    var widgetOpacity by remember { mutableStateOf(settings.widgetOpacity) }
-    var widgetText by remember { mutableStateOf(settings.widgetText) }
     val snackbars = remember { SnackbarHostState() }
 
     SettingsSubScreen(s.appearanceCard, onBack, snackbars) {
@@ -1152,109 +1093,6 @@ fun ChartSettingsScreen(onBack: () -> Unit) {
                     colors = fieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-        }
-        // Виджет: цвет, прозрачность и цвет текста с живым предпросмотром.
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                val lightText = WidgetStyle.lightText(widgetColor, widgetText)
-                val primaryText = Color(WidgetStyle.textColor(primary = true, light = lightText))
-                val secondaryText = Color(WidgetStyle.textColor(primary = false, light = lightText))
-                Text(s.widgetStyleTitle, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(4.dp))
-                Text(s.widgetStyleBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                // Предпросмотр на двухцветной подложке: светлая и тёмная половины показывают читаемость
-                // на любых обоях, а не на цвете темы приложения. Состав — как у широкого виджета: строки, подстрока, кнопка.
-                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))) {
-                    Row(Modifier.matchParentSize()) {
-                        Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE6E6E6)))
-                        Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFF2B2B2B)))
-                    }
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                            .background(Color(widgetColor).copy(alpha = widgetOpacity / 100f), RoundedCornerShape(14.dp))
-                            .padding(12.dp),
-                    ) {
-                        Text(s.widgetTitle, style = MaterialTheme.typography.labelSmall, color = secondaryText)
-                        Text(s.widgetPreviewLine1, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1)
-                        Text(s.mealAfterNow, style = MaterialTheme.typography.labelSmall, color = secondaryText, maxLines = 1)
-                        Text(s.widgetPreviewLine2, color = primaryText, maxLines = 1)
-                        Spacer(Modifier.height(8.dp))
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(if (lightText) Color(0x33FFFFFF) else Color(0x1A000000), RoundedCornerShape(12.dp))
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(s.widgetTake, style = MaterialTheme.typography.labelLarge, color = primaryText, maxLines = 1, softWrap = false)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                Text(s.widgetColorTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(6.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    WidgetStyle.presets.forEachIndexed { i, argb ->
-                        FilterChip(
-                            selected = widgetColor == argb,
-                            onClick = {
-                                widgetColor = argb
-                                settings.widgetColor = argb
-                                PillWidgetProvider.refreshAsync(context)
-                            },
-                            label = { Text(s.widgetColorNames.getOrElse(i) { "" }, maxLines = 1, softWrap = false) },
-                            leadingIcon = {
-                                Box(
-                                    Modifier
-                                        .size(14.dp)
-                                        .background(Color(argb), CircleShape)
-                                        .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
-                                )
-                            },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                // Ползунок — про прозрачность (так думает пользователь), хранится непрозрачность.
-                Text(s.widgetTransparency(100 - widgetOpacity), style = MaterialTheme.typography.bodyMedium)
-                Slider(
-                    value = (100 - widgetOpacity).toFloat(),
-                    onValueChange = {
-                        widgetOpacity = (100 - it.roundToInt()).coerceIn(0, 100)
-                        settings.widgetOpacity = widgetOpacity
-                    },
-                    onValueChangeFinished = { PillWidgetProvider.refreshAsync(context) },
-                    valueRange = 0f..100f,
-                    steps = 9,
-                )
-                // На прозрачном фоне «Авто» гадает по невидимому цвету — подсказываем выбрать цвет текста руками.
-                if (widgetText == WidgetStyle.TEXT_AUTO && widgetOpacity < 50) {
-                    Text(s.widgetAutoHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(6.dp))
-                }
-                Text(s.widgetTextTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(6.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf(
-                        WidgetStyle.TEXT_AUTO to s.widgetTextAuto,
-                        WidgetStyle.TEXT_LIGHT to s.widgetTextLight,
-                        WidgetStyle.TEXT_DARK to s.widgetTextDark,
-                    ).forEach { (mode, label) ->
-                        FilterChip(
-                            selected = widgetText == mode,
-                            onClick = {
-                                widgetText = mode
-                                settings.widgetText = mode
-                                PillWidgetProvider.refreshAsync(context)
-                            },
-                            label = { Text(label, maxLines = 1, softWrap = false) },
-                        )
-                    }
-                }
             }
         }
     }

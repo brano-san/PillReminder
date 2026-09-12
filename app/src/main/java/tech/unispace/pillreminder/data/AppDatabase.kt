@@ -30,7 +30,7 @@ class Converters {
         TrackerEntry::class,
         MealEvent::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -91,7 +91,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+        /**
+         * 3 → 4: версия 1.2.1 — у визита к врачу адрес/кабинет и выключатель напоминания.
+         * Пока 1.2.1 не выпущена, новые поля этой версии дописываются сюда.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE visits ADD COLUMN place TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE visits ADD COLUMN remind INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

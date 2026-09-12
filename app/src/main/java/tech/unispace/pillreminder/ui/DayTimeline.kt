@@ -2,6 +2,7 @@ package tech.unispace.pillreminder.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,28 +38,53 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
+import tech.unispace.pillreminder.data.OVERDUE_GRACE_MS
 
 /** Что за узел на схеме дня. */
 enum class TimelineKind { WAKE, PILL, MEAL, BED }
 
-/** Состояние приёма на схеме; у подъёма, еды и сна — [NONE]. */
-enum class TimelineState { NONE, TAKEN, PENDING, OVERDUE, SKIPPED }
+/**
+ * Состояние приёма на схеме; у подъёма, еды и сна — [NONE].
+ * [DUE] — время наступило, но опоздание меньше [OVERDUE_GRACE_MS] (янтарный, «ждёт приёма»);
+ * [OVERDUE] — просрочен критически, будильник уже перестал звонить (красный).
+ */
+enum class TimelineState { NONE, TAKEN, PENDING, DUE, OVERDUE, SKIPPED }
 
 data class TimelineNode(
     val kind: TimelineKind,
     val at: Long,
-    /** Название таблетки; для остальных узлов подпись берётся из Lang. */
+    /** Короткая подпись таблетки ([timelinePillLabel]); для остальных узлов подпись берётся из Lang. */
     val label: String = "",
     val state: TimelineState = TimelineState.NONE,
     /** Форма выпуска — для иконки таблетки. */
     val form: String = "",
+    /** Таблетка узла — тап по кружку подсвечивает её карточку; 0 у подъёма, еды и сна. */
+    val medId: Long = 0,
 )
+
+/**
+ * Короткая подпись таблетки под кружком: в 64 dp «Эсциталопрам» не помещается, а «Эсцитало…» не отличить от
+ * «Эсцитало…» другой дозировки. С дозировкой — три буквы имени и дозировка без пробела («Эсц 10мг»),
+ * без неё — имя целиком до семи знаков, иначе шесть и многоточие.
+ */
+fun timelinePillLabel(name: String, doseInfo: String): String {
+    val dose = doseInfo.trim().replace(" ", "")
+    val trimmed = name.trim()
+    return when {
+        dose.isNotEmpty() -> trimmed.take(3) + " " + dose
+        trimmed.length <= 7 -> trimmed
+        else -> trimmed.take(6) + "…"
+    }
+}
+
+/** Отложен кнопкой «Отложить»: момент назначен и ещё впереди, а цепочка повторов не начиналась. */
+fun Dose.snoozedUntil(now: Long): Long? = remindAt?.takeIf { attempt == 0 && it > now && plannedAt <= now }
 
 /**
  * Узлы схемы дня по времени: подъём, приёмы (выпитые — по факту, остальные — по плану),
  * отметки «Еда» этого цикла и отход ко сну. Чистая функция — проверяется тестом.
  * Еда до подъёма и после отбоя к схеме дня не относится. Приём из [waitingIds] ждёт кнопку «Еда»
- * и просроченным не считается — как и на карточке.
+ * и просроченным не считается — как и на карточке; отложенный кнопкой «Отложить» — тоже ожидающий.
  */
 fun buildTimelineNodes(
     wakeAt: Long?,
@@ -68,16 +94,31 @@ fun buildTimelineNodes(
     meals: List<Long>,
     now: Long,
     waitingIds: Set<Long> = emptySet(),
+    doseInfoById: Map<Long, String> = emptyMap(),
+    lateAfterMs: Long = OVERDUE_GRACE_MS,
 ): List<TimelineNode> = buildList {
     wakeAt?.let { add(TimelineNode(TimelineKind.WAKE, it)) }
     doses.forEach { d ->
         val state = when (d.status) {
             DoseStatus.TAKEN -> TimelineState.TAKEN
             DoseStatus.SKIPPED -> TimelineState.SKIPPED
-            DoseStatus.PENDING -> if (d.plannedAt <= now && d.id !in waitingIds) TimelineState.OVERDUE else TimelineState.PENDING
+            DoseStatus.PENDING -> when {
+                d.plannedAt > now || d.id in waitingIds || d.snoozedUntil(now) != null -> TimelineState.PENDING
+                now - d.plannedAt >= lateAfterMs -> TimelineState.OVERDUE
+                else -> TimelineState.DUE
+            }
         }
         val at = if (d.status == DoseStatus.TAKEN) d.takenAt ?: d.plannedAt else d.plannedAt
-        add(TimelineNode(TimelineKind.PILL, at, d.medNameSnapshot, state, formById[d.medId] ?: ""))
+        add(
+            TimelineNode(
+                kind = TimelineKind.PILL,
+                at = at,
+                label = timelinePillLabel(d.medNameSnapshot, doseInfoById[d.medId] ?: ""),
+                state = state,
+                form = formById[d.medId] ?: "",
+                medId = d.medId,
+            ),
+        )
     }
     val from = wakeAt ?: doses.minOfOrNull { it.plannedAt } ?: 0L
     meals.filter { it >= from && (bedAt == null || it <= bedAt) }
@@ -86,6 +127,7 @@ fun buildTimelineNodes(
 }.sortedBy { it.at }
 
 private val TL_GREEN = Color(0xFF4CAF50)
+private val TL_AMBER = Color(0xFFE0A100)
 private val TL_RED = Color(0xFFE53935)
 
 private val NODE_WIDTH = 64.dp
@@ -97,9 +139,10 @@ private val CONNECTOR_MIN_WIDTH = 44.dp
  * Это последовательность, а не шкала времени: расстояния одинаковые, промежуток подписан.
  * Иначе три утренние таблетки слипались бы в точку, а до вечерней был бы пустой экран.
  * Ряд сам прокручивается к первому будущему узлу — вечером видно «сейчас», а не утро.
+ * Тап по таблетке — [onPillTap] с её id: главный экран подсвечивает карточку.
  */
 @Composable
-fun DayTimeline(nodes: List<TimelineNode>, now: Long, modifier: Modifier = Modifier) {
+fun DayTimeline(nodes: List<TimelineNode>, now: Long, modifier: Modifier = Modifier, onPillTap: (Long) -> Unit = {}) {
     val scroll = rememberScrollState()
     val density = LocalDensity.current
     // Высота строки над узлами — от шрифта, а не 16 dp: при крупном системном шрифте подпись промежутка не режется,
@@ -121,25 +164,27 @@ fun DayTimeline(nodes: List<TimelineNode>, now: Long, modifier: Modifier = Modif
                     header = header,
                 )
             }
-            // Просроченный приём — единственный узел, которому нужно внимание: его не приглушаем.
-            TimelineNodeView(node, past = node.at <= now && node.state != TimelineState.OVERDUE, header = header)
+            // Наступивший или просроченный приём — единственные узлы, которым нужно внимание: их не приглушаем.
+            val attention = node.state == TimelineState.DUE || node.state == TimelineState.OVERDUE
+            TimelineNodeView(node, past = node.at <= now && !attention, header = header, onTap = onPillTap)
         }
     }
 }
 
 @Composable
-private fun TimelineNodeView(node: TimelineNode, past: Boolean, header: Dp) {
+private fun TimelineNodeView(node: TimelineNode, past: Boolean, header: Dp, onTap: (Long) -> Unit) {
     val s = Lang.s
     val scheme = MaterialTheme.colorScheme
     val fill = when (node.state) {
         TimelineState.TAKEN -> TL_GREEN
+        TimelineState.DUE -> TL_AMBER
         TimelineState.OVERDUE -> TL_RED
         TimelineState.SKIPPED -> scheme.outlineVariant
         TimelineState.PENDING -> scheme.surface
         TimelineState.NONE -> scheme.primaryContainer
     }
     val content = when (node.state) {
-        TimelineState.TAKEN, TimelineState.OVERDUE -> Color.White
+        TimelineState.TAKEN, TimelineState.DUE, TimelineState.OVERDUE -> Color.White
         TimelineState.SKIPPED -> scheme.onSurfaceVariant
         TimelineState.PENDING -> scheme.primary
         TimelineState.NONE -> scheme.onPrimaryContainer
@@ -161,6 +206,7 @@ private fun TimelineNodeView(node: TimelineNode, past: Boolean, header: Dp) {
         .size(NODE_SIZE)
         .background(fill, CircleShape)
         .then(if (node.state == TimelineState.PENDING) Modifier.border(2.dp, scheme.primary, CircleShape) else Modifier)
+        .then(if (node.kind == TimelineKind.PILL && node.medId > 0) Modifier.clickable { onTap(node.medId) } else Modifier)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,

@@ -149,9 +149,12 @@ private fun previewFacts(
     val amountValue = amount.replace(',', '.').toDoubleOrNull()?.coerceAtLeast(0.01) ?: 1.0
     // Пустая своя форма сохраняется как «Таблетка» — так и показываем.
     val formShown = s.formName(form.ifBlank { MED_FORMS.first() })
+    val formValue = form.ifBlank { MED_FORMS.first() }
+    val doseInfo = listOf(doseValue, doseUnit).filter { it.isNotBlank() }.joinToString(" ")
     return buildList {
-        add(listOf(formShown, listOf(doseValue, doseUnit).filter { it.isNotBlank() }.joinToString(" ")).filter { it.isNotBlank() }.joinToString(" "))
-        add(s.perIntake(s.pills(amountValue, form.ifBlank { MED_FORMS.first() })))
+        // Форму на карточке показывает иконка; словами — только своя форма.
+        if (formValue !in MED_FORMS) add(formShown)
+        add(s.amountFact(amountValue, formValue, doseInfo))
         s.mealRelationParts(afterMeal, beforeMeal, mealCalories).forEach { add(it) }
         when {
             asNeeded -> add(s.asNeededShort)
@@ -1010,12 +1013,6 @@ fun EditMedScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                             }
-                            // Итог — последним: он подводит черту под всеми настройками шага.
-                            HintCard(
-                                s.scheduleResult(
-                                    if (byClock) s.byClockShort + " " + clockTimes.sorted().joinToString(", ") { hhmmText(it) } else s.schedule(times, interval, days),
-                                ),
-                            )
                         }
                         // Курс — и для «по необходимости»: его тоже можно ограничить по дням и завершить досрочно.
                         SectionCard(s.durationQ) {
@@ -1053,6 +1050,19 @@ fun EditMedScreen(
                                 }
                             }
                         }
+                        // Итог — самым последним: он подводит черту под всеми настройками шага, включая курс.
+                        HintCard(
+                            s.scheduleResult(
+                                listOfNotNull(
+                                    when {
+                                        asNeeded -> s.asNeededShort
+                                        byClock -> s.byClockShort + " " + clockTimes.sorted().joinToString(", ") { hhmmText(it) }
+                                        else -> s.schedule(times, interval, days)
+                                    },
+                                    if (duration > 0) s.durationLabelShort(duration) else null,
+                                ).joinToString(" · "),
+                            ),
+                        )
                     }
 
                     Step.CONDITIONS -> {

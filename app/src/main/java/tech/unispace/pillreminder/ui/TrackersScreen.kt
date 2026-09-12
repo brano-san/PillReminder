@@ -176,7 +176,8 @@ fun LineChart(
     extraValues: List<Double> = emptyList(),
     extraColor: Color = Color.Unspecified,
 ) {
-    val gridColor = MaterialTheme.colorScheme.outlineVariant
+    // На карточке (surfaceContainerHighest) outlineVariant почти не виден — пунктир мини-графика берёт контрастнее.
+    val gridColor = if (showGrid) MaterialTheme.colorScheme.outlineVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
 
     Canvas(modifier) {
@@ -311,8 +312,6 @@ fun TrackersScreen(
     rows: List<TrackerRow>,
     onOpen: (Long) -> Unit,
     onCreate: (String) -> Unit,
-    /** «Создать все три»: трекеры заводятся сразу, а не стопкой мастеров друг за другом. */
-    onCreateAll: (List<String>) -> Unit,
     onAddEntry: (TrackerEntry) -> Unit,
     onOpenCorrelations: () -> Unit,
     contentPadding: PaddingValues,
@@ -337,22 +336,7 @@ fun TrackersScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Кнопка нужна, только когда не создано хотя бы два трекера: ради одного она лишняя.
-            val missing = TRACKER_TYPES.filter { t -> rows.none { it.tracker.type == t } }
-            if (missing.size >= 2) {
-                item(key = "create-all") {
-                    OutlinedButton(
-                        onClick = { onCreateAll(missing) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            if (missing.size == TRACKER_TYPES.size) s.createAllTrackers else s.createRemaining,
-                            maxLines = 1,
-                            softWrap = false,
-                        )
-                    }
-                }
-            }
+            // Каждая карточка самостоятельна: трекер заводится своей кнопкой, общей «Создать все» нет.
             items(TRACKER_TYPES, key = { it }) { type ->
                 val row = rows.firstOrNull { it.tracker.type == type }
                 if (row != null) TrackerCard(row, miniPoints, onOpen) { addFor = row.tracker } else TemplateCard(type, onCreate)

@@ -16,6 +16,32 @@ data class ReleaseNotes(
 
 val CHANGELOG: List<ReleaseNotes> = listOf(
     ReleaseNotes(
+        version = "1.2.1",
+        date = "",
+        ru = listOf(
+            "Забыли нажать «Еда»: в расчётное время приходит мягкое напоминание «Поели?» с кнопками «Еда» и «Выпито».",
+            "«Отложить» прямо на карточке таблетки; прогресс набора — точками вместо «Приём 1 из 3».",
+            "Красный цвет — только при опоздании больше 2 часов; до этого приём «ждёт» янтарным. Сегодняшний день в календаре не краснеет, пока не закончился.",
+            "Схема дня — отдельной карточкой, короткие подписи («Эсц 10мг»), тап по кружку подсвечивает карточку.",
+            "Метки без дублей: «10 мг × 2 таб.», калории внутри правила «после еды»; комментарий — строкой, а не кнопкой.",
+            "Кнопки «Отчёт · Советы · Туториал» — внизу главного экрана. Порядок таблеток — через долгое нажатие, без перетаскивания.",
+            "Заметка — один экран. Визит: адрес или кабинет, переключатель напоминания и точные моменты уведомлений.",
+            "Экран «Виджет» в настройках: палитра цветов, подписи «Светлые/Тёмные обои», реальные приёмы в предпросмотре.",
+            "Мастер: итог шага «Как часто» — последним и с курсом. Каталог: «зачем фото» под кнопкой. Трекеры: без «Создать все три», сетка мини-графика видна.",
+        ),
+        en = listOf(
+            "Forgot to tap \"Ate\": at the planned time a gentle \"Had a meal?\" nudge arrives with \"Ate\" and \"Taken\" buttons.",
+            "Snooze right on the pill card; set progress as dots instead of \"Intake 1 of 3\".",
+            "Red only when more than 2 hours late; before that the intake \"waits\" in amber. Today never turns red in the calendar until the day is over.",
+            "Day timeline as its own card, short labels (\"Esc 10mg\"), tapping a circle highlights the card.",
+            "No duplicate labels: \"10 mg × 2 tab.\", calories inside the \"after a meal\" rule; the comment is a line, not a button.",
+            "\"Report · Tips · Tutorial\" moved to the bottom of the home screen. Pill order via long press, no dragging.",
+            "Note is a single screen. Visit: address or room, a reminder switch and the exact reminder moments.",
+            "\"Widget\" screen in Settings: color palette, \"Light/Dark wallpaper\" labels, real intakes in the preview.",
+            "Wizard: the \"How often\" summary comes last and includes the course. Catalog: \"why a photo\" under the button. Trackers: no \"Create all three\", the mini chart grid is visible.",
+        ),
+    ),
+    ReleaseNotes(
         version = "1.2",
         date = "13.09.2026",
         ru = listOf(

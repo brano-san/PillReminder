@@ -6,16 +6,12 @@
 package tech.unispace.pillreminder.ui
 
 import android.widget.Toast
-import tech.unispace.pillreminder.data.TrackerEntry
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,39 +27,51 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Air
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Grain
 import androidx.compose.material.icons.filled.Healing
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Snooze
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.Vaccines
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -71,45 +79,43 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import tech.unispace.pillreminder.alarm.formatAmount
 import tech.unispace.pillreminder.alarm.trackerDisplayName
-import java.time.LocalDate
-import java.time.LocalTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import tech.unispace.pillreminder.data.Dose
+import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.EARLY_TAKE_THRESHOLD_MS
 import tech.unispace.pillreminder.data.MEAL_WAIT_MAX_MS
+import tech.unispace.pillreminder.data.MED_FORMS
 import tech.unispace.pillreminder.data.Medication
-import tech.unispace.pillreminder.data.TrackerType
-import tech.unispace.pillreminder.data.Dose
-import tech.unispace.pillreminder.data.askTimesList
-import tech.unispace.pillreminder.data.byClock
-import tech.unispace.pillreminder.data.fixedTimesList
+import tech.unispace.pillreminder.data.OVERDUE_GRACE_MS
 import tech.unispace.pillreminder.data.Settings
+import tech.unispace.pillreminder.data.TrackerEntry
+import tech.unispace.pillreminder.data.TrackerType
+import tech.unispace.pillreminder.data.byClock
 import tech.unispace.pillreminder.data.epochDayOf
+import tech.unispace.pillreminder.data.fixedTimesList
 import tech.unispace.pillreminder.data.today
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 /** Иконка формы выпуска — своя для каждой формы. */
 fun formIcon(form: String): ImageVector = when (form) {
@@ -124,8 +130,15 @@ fun formIcon(form: String): ImageVector = when (form) {
 }
 
 private val GREEN = Color(0xFF4CAF50)
-private val AMBER = Color(0xFFFFC107)
+private val AMBER = Color(0xFFE0A100)
 private val RED = Color(0xFFE53935)
+
+/** Янтарный для текста: сам AMBER на белом не читается, в тёмной теме — наоборот, нужен светлее. */
+@Composable
+private fun amberText(): Color = if (isSystemInDarkTheme()) Color(0xFFFFC65C) else Color(0xFF9A6700)
+
+/** Сколько держать подсветку карточки после тапа по кружку на схеме дня. */
+private const val HIGHLIGHT_MS = 2_500L
 
 @Composable
 fun HomeScreen(
@@ -141,6 +154,8 @@ fun HomeScreen(
     /** Отмена «Принять сейчас» — запись удаляется целиком. */
     onDeleteIntake: (Long) -> Unit,
     onSkip: (Long) -> Unit,
+    /** «Отложить» с карточки: приём и минуты из настроек «Отложить». */
+    onSnooze: (doseId: Long, minutes: Int) -> Unit,
     onEdit: (Long) -> Unit,
     onAdd: () -> Unit,
     onDelete: (Long) -> Unit,
@@ -163,9 +178,11 @@ fun HomeScreen(
 ) {
     val s = Lang.s
     val context = LocalContext.current
-    val compact = Settings(context).homeCompact
+    val settings = remember { Settings(context) }
+    val compact = settings.homeCompact
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
     fun confirmWithUndo(message: String, undo: () -> Unit) {
         scope.launch {
@@ -175,39 +192,64 @@ fun HomeScreen(
         }
     }
 
-    // Локальный порядок для перетаскивания; персистится в onDragEnd.
-    val medIds = state.rows.map { it.med.id }
-    var order by remember(medIds) { mutableStateOf(medIds) }
-    var draggingId by remember { mutableStateOf<Long?>(null) }
-    var dragOffset by remember { mutableFloatStateOf(0f) }
-    val itemHeights = remember { mutableStateMapOf<Long, Int>() }
-    val orderedRows = order.mapNotNull { id -> state.rows.firstOrNull { it.med.id == id } }
-
     var deleteTarget by remember { mutableStateOf<MedRow?>(null) }
     deleteTarget?.let { row ->
         ConfirmDeleteDialog(title = row.med.name, onConfirm = { onDelete(row.med.id) }, onDismiss = { deleteTarget = null })
     }
+    // Порядок карточек — стрелками в диалоге: перетаскивание в ленте конфликтовало с прокруткой и требовало ручку на каждой карточке.
+    var reorderOpen by remember { mutableStateOf(false) }
+    if (reorderOpen) {
+        ReorderDialog(
+            meds = state.rows.map { it.med },
+            onDone = { ids ->
+                onReorder(ids)
+                reorderOpen = false
+            },
+            onDismiss = { reorderOpen = false },
+        )
+    }
     // Долгое нажатие предлагает выбор: копия схемы нужна чаще, чем удаление; в компактном режиме
-    // здесь же живёт «Пропустить» — на карточке для него места нет.
+    // здесь же живут «Пропустить» и «Отложить» — на карточке для них места нет.
     var actionTarget by remember { mutableStateOf<MedRow?>(null) }
     actionTarget?.let { row ->
         val next = row.nextDose
+        val due = next != null && !row.med.asNeeded && next.plannedAt <= state.now && !row.waitsMeal
         AlertDialog(
             onDismissRequest = { actionTarget = null },
             title = { Text(row.med.name) },
-            text = if (next != null && !row.med.asNeeded) {
-                {
-                    OutlinedButton(
-                        onClick = {
-                            onSkip(next.id)
-                            confirmWithUndo(s.snackSkipped(row.med.name)) { onUndo(next.id) }
-                            actionTarget = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(s.skip, maxLines = 1, softWrap = false) }
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (next != null && !row.med.asNeeded) {
+                        OutlinedButton(
+                            onClick = {
+                                onSkip(next.id)
+                                confirmWithUndo(s.snackSkipped(row.med.name)) { onUndo(next.id) }
+                                actionTarget = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(s.skip, maxLines = 1, softWrap = false) }
+                    }
+                    if (compact && due) {
+                        settings.snoozeOptions.forEach { minutes ->
+                            OutlinedButton(
+                                onClick = {
+                                    onSnooze(next.id, minutes)
+                                    actionTarget = null
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(s.snoozeFor(s.duration(minutes)), maxLines = 1, softWrap = false) }
+                        }
+                    }
+                    if (state.rows.size > 1) {
+                        OutlinedButton(
+                            onClick = {
+                                actionTarget = null
+                                reorderOpen = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(s.reorderBtn, maxLines = 1, softWrap = false) }
+                    }
                 }
-            } else {
-                null
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -240,7 +282,7 @@ fun HomeScreen(
         )
     }
     fun wakeUpChecked() {
-        val bedAt = Settings(context).pendingSleepStart
+        val bedAt = settings.pendingSleepStart
         val slept = System.currentTimeMillis() - bedAt
         if (bedAt > 0 && slept < SHORT_SLEEP_MS) shortSleep = slept else onWakeUp()
     }
@@ -277,8 +319,50 @@ fun HomeScreen(
     val deliveryFine = remember(minuteKey) { deliveryOk(context) }
     val showWakeButton = state.wokeUpAt == null && state.loaded
 
+    // Схема дня: подъём → таблетки → еда → сон. Пересобирается раз в минуту, а не раз в секунду.
+    // Ключи сравниваются по содержимому: rows пересоздаются каждую секунду, а карты форм/дозировок и набор ждущих — нет.
+    val formById = state.rows.associate { it.med.id to it.med.form }
+    val doseInfoById = state.rows.associate { it.med.id to it.med.doseInfo }
+    val waitingIds = state.rows.filter { it.waitsMeal }.mapNotNull { it.nextDose?.id }.toSet()
+    val nodes = if (state.wokeUpAt != null && settings.showDayTimeline) {
+        remember(state.doses, state.meals, state.wokeUpAt, state.bedAt, formById, doseInfoById, waitingIds, minuteKey) {
+            buildTimelineNodes(
+                wakeAt = state.wokeUpAt,
+                bedAt = state.bedAt,
+                doses = state.doses,
+                formById = formById,
+                meals = state.meals,
+                now = state.now,
+                waitingIds = waitingIds,
+                doseInfoById = doseInfoById,
+            )
+        }
+    } else {
+        emptyList()
+    }
+    val showTimeline = nodes.size > 1
+
+    // Ждущий еду приём «пора» не считается: кнопка обещает ровно то, что отметит планировщик.
+    val dueCount = state.rows.count { r -> !r.waitsMeal && r.snoozedUntil == null && r.nextDose?.let { it.plannedAt <= state.now } == true }
+    val showTakeAll = dueCount >= 2
+    val showEmpty = state.rows.isEmpty() && state.loaded
+
+    // Тап по кружку на схеме дня: прокрутить к карточке и подсветить её на пару секунд.
+    var highlightMedId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(highlightMedId) {
+        val id = highlightMedId ?: return@LaunchedEffect
+        val index = state.rows.indexOfFirst { it.med.id == id }
+        if (index >= 0) {
+            val before = (if (!deliveryFine) 1 else 0) + 1 + (if (showTimeline) 1 else 0) + (if (showEmpty) 1 else 0) + (if (showTakeAll) 1 else 0)
+            listState.animateScrollToItem(before + index)
+        }
+        delay(HIGHLIGHT_MS)
+        highlightMedId = null
+    }
+
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = 16.dp,
@@ -306,17 +390,30 @@ fun HomeScreen(
                 }
             }
 
-            item(key = "wake") {
-                WakeCard(state, onRestartDay, onOpenTips, onOpenTutorial, onOpenReport)
+            item(key = "wake") { WakeCard(state, onRestartDay) }
+
+            // Схема дня — своей карточкой: карточка пробуждения говорит о времени подъёма, схема — о всём дне.
+            if (showTimeline) {
+                item(key = "timeline") {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Timeline, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(s.timelineCardTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            DayTimeline(nodes, state.now, Modifier.fillMaxWidth(), onPillTap = { highlightMedId = it })
+                        }
+                    }
+                }
             }
 
-            if (state.rows.isEmpty() && state.loaded) {
+            if (showEmpty) {
                 item(key = "empty") { EmptyHint() }
             }
 
-            // Ждущий еду приём «пора» не считается: кнопка обещает ровно то, что отметит планировщик.
-            val dueCount = orderedRows.count { r -> !r.waitsMeal && r.nextDose?.let { it.plannedAt <= state.now } == true }
-            if (dueCount >= 2) {
+            if (showTakeAll) {
                 item(key = "take-all") {
                     Button(
                         onClick = {
@@ -333,9 +430,7 @@ fun HomeScreen(
                 }
             }
 
-            items(orderedRows, key = { it.med.id }) { row ->
-                val id = row.med.id
-                val isDragging = draggingId == id
+            items(state.rows, key = { it.med.id }) { row ->
                 MedCard(
                     row = row,
                     now = state.now,
@@ -343,6 +438,8 @@ fun HomeScreen(
                     // доказательство, что день размечен (цикл мог истечь по 18-часовому лимиту).
                     awake = state.wokeUpAt != null || row.med.byClock || row.nextDose != null,
                     compact = compact,
+                    highlighted = highlightMedId == row.med.id,
+                    snoozeOptions = settings.snoozeOptions,
                     onTake = { doseId ->
                         onTake(doseId)
                         confirmWithUndo(s.snackTaken(row.med.name)) { onUndo(doseId) }
@@ -354,61 +451,31 @@ fun HomeScreen(
                         onSkip(doseId)
                         confirmWithUndo(s.snackSkipped(row.med.name)) { onUndo(doseId) }
                     },
+                    onSnooze = onSnooze,
                     onEdit = onEdit,
                     onLongPress = { actionTarget = it },
-                    cardModifier = Modifier
-                        // Модификатор стабилен между кадрами: тянущаяся карточка просто без
-                        // анимации размещения — иначе при смене цепочки она «телепортируется».
-                        .animateItem(placementSpec = if (isDragging) null else spring<IntOffset>())
-                        .onGloballyPositioned { itemHeights[id] = it.size.height }
-                        .zIndex(if (isDragging) 1f else 0f)
-                        .graphicsLayer {
-                            translationY = if (isDragging) dragOffset else 0f
-                            val sc = if (isDragging) 1.02f else 1f
-                            scaleX = sc
-                            scaleY = sc
-                        },
-                    dragHandleModifier = Modifier.pointerInput(id) {
-                        detectDragGestures(
-                            onDragStart = {
-                                draggingId = id
-                                dragOffset = 0f
-                            },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                dragOffset += amount.y
-                                val idx = order.indexOf(id)
-                                val spacing = 12.dp.toPx()
-                                if (dragOffset > 0 && idx < order.lastIndex) {
-                                    val step = (itemHeights[order[idx + 1]] ?: 0) + spacing
-                                    if (step > 0 && dragOffset > step * 0.5f) {
-                                        order = order.toMutableList().apply { removeAt(idx); add(idx + 1, id) }
-                                        dragOffset -= step
-                                    }
-                                } else if (dragOffset < 0 && idx > 0) {
-                                    val step = (itemHeights[order[idx - 1]] ?: 0) + spacing
-                                    if (step > 0 && -dragOffset > step * 0.5f) {
-                                        order = order.toMutableList().apply { removeAt(idx); add(idx - 1, id) }
-                                        dragOffset += step
-                                    }
-                                }
-                            },
-                            onDragEnd = {
-                                draggingId = null
-                                dragOffset = 0f
-                                onReorder(order)
-                            },
-                            onDragCancel = {
-                                draggingId = null
-                                dragOffset = 0f
-                            },
-                        )
-                    },
+                    cardModifier = Modifier.animateItem(),
                 )
             }
 
             items(trackerRows, key = { "tracker-" + it.tracker.id }) { row ->
                 TrackerReminderCard(row, state.now, onOpenTracker, onQuickEntry)
+            }
+
+            // Редкие действия — в самом низу, под таблетками и трекерами: они не про сегодняшний день.
+            if (settings.showHomeActions) {
+                item(key = "home-actions") {
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            HomeActionButton(Icons.Default.Description, s.reportBtn, Modifier.weight(1f), onOpenReport)
+                            HomeActionButton(Icons.Default.Lightbulb, s.tipsButton, Modifier.weight(1f), onOpenTips)
+                            HomeActionButton(Icons.Default.School, s.tutorialBtn, Modifier.weight(1f), onOpenTutorial)
+                        }
+                    }
+                }
             }
         }
 
@@ -435,7 +502,7 @@ fun HomeScreen(
                         Text(s.iWokeUp, style = MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false)
                     }
                 } else {
-                    val bedtimeAt = remember(state.now / 60_000) { Settings(context).pendingSleepStart }
+                    val bedtimeAt = remember(minuteKey) { settings.pendingSleepStart }
                     FilledTonalButton(
                         onClick = {
                             onBedtime()
@@ -491,14 +558,40 @@ fun HomeScreen(
     }
 }
 
+/** Порядок таблеток стрелками: крайние стрелки неактивны, результат уходит одним списком id. */
 @Composable
-private fun WakeCard(
-    state: HomeState,
-    onRestartDay: () -> Unit,
-    onOpenTips: () -> Unit,
-    onOpenTutorial: () -> Unit,
-    onOpenReport: () -> Unit,
-) {
+private fun ReorderDialog(meds: List<Medication>, onDone: (List<Long>) -> Unit, onDismiss: () -> Unit) {
+    val s = Lang.s
+    var order by remember { mutableStateOf(meds) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(s.reorderTitle) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                order.forEachIndexed { i, med ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(formIcon(med.form), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(med.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        IconButton(
+                            enabled = i > 0,
+                            onClick = { order = order.toMutableList().also { it.add(i - 1, it.removeAt(i)) } },
+                        ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = s.moveUp) }
+                        IconButton(
+                            enabled = i < order.lastIndex,
+                            onClick = { order = order.toMutableList().also { it.add(i + 1, it.removeAt(i)) } },
+                        ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = s.moveDown) }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onDone(order.map { it.id }) }) { Text(s.done) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(s.cancel) } },
+    )
+}
+
+@Composable
+private fun WakeCard(state: HomeState, onRestartDay: () -> Unit) {
     val s = Lang.s
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -513,7 +606,6 @@ private fun WakeCard(
             dismissButton = { TextButton(onClick = { confirmNewDay = false }) { Text(s.cancel) } },
         )
     }
-    var showActions by remember { mutableStateOf(settings.showHomeActions) }
     var confirmShift by remember { mutableStateOf(false) }
     if (confirmShift) {
         AlertDialog(
@@ -559,43 +651,12 @@ private fun WakeCard(
                     }
                 }
             }
-            // Схема дня: подъём → таблетки → еда → сон. Пересобирается раз в минуту, а не раз в секунду.
-            if (state.wokeUpAt != null && settings.showDayTimeline) {
-                val minute = state.now / 60_000
-                // Ключи сравниваются по содержимому: rows пересоздаются каждую секунду, а карта форм и набор ждущих — нет.
-                val formById = state.rows.associate { it.med.id to it.med.form }
-                val waitingIds = state.rows.filter { it.waitsMeal }.mapNotNull { it.nextDose?.id }.toSet()
-                val nodes = remember(state.doses, state.meals, state.wokeUpAt, state.bedAt, formById, waitingIds, minute) {
-                    buildTimelineNodes(
-                        wakeAt = state.wokeUpAt,
-                        bedAt = state.bedAt,
-                        doses = state.doses,
-                        formById = formById,
-                        meals = state.meals,
-                        now = state.now,
-                        waitingIds = waitingIds,
-                    )
-                }
-                if (nodes.size > 1) {
-                    Spacer(Modifier.height(10.dp))
-                    DayTimeline(nodes, state.now, Modifier.fillMaxWidth())
-                }
-            }
             if (state.wokeUpAt != null && state.allDone) {
                 Spacer(Modifier.height(8.dp))
                 Text(s.dayDoneHome, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.height(6.dp))
                 Button(onClick = { confirmNewDay = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(s.newDayBtn, maxLines = 1, softWrap = false)
-                }
-            }
-            if (showActions) {
-                Spacer(Modifier.height(4.dp))
-                // Кнопки одинаковой ширины: ряд не «прыгает» из-за разной длины подписей.
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                    HomeActionButton(Icons.Default.Description, s.reportBtn, Modifier.weight(1f), onOpenReport)
-                    HomeActionButton(Icons.Default.Lightbulb, s.tipsButton, Modifier.weight(1f), onOpenTips)
-                    HomeActionButton(Icons.Default.School, s.tutorialBtn, Modifier.weight(1f), onOpenTutorial)
                 }
             }
         }
@@ -613,11 +674,6 @@ private fun TrackerReminderCard(
     val last = row.entries.firstOrNull()
     val lastDay = last?.let { epochDayOf(it.atMillis) }
     val doneToday = lastDay == today()
-    // Красным — только когда первое время опроса уже прошло и напоминания включены:
-    // в семь утра «Сегодня данных нет» о вечернем трекере не тревога, а факт.
-    val minutesNow = LocalTime.now(ZoneId.systemDefault()).let { it.hour * 60 + it.minute }
-    val askPassed = row.tracker.remindEnabled && minutesNow >= row.tracker.askTimesList().first()
-    val subtitleColor = if (doneToday || !askPassed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
 
     Card(Modifier.fillMaxWidth().clickable { onOpen(row.tracker.id) }) {
       Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -626,6 +682,7 @@ private fun TrackerReminderCard(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(trackerDisplayName(row.tracker.type), fontWeight = FontWeight.SemiBold)
+                // Без красного: «сегодня данных нет» — факт, а не тревога.
                 Text(
                     when {
                         last != null && doneToday -> s.trackerDoneToday(formatClock(last.atMillis))
@@ -633,7 +690,7 @@ private fun TrackerReminderCard(
                         else -> s.trackerNotToday + ", " + s.neverRecorded
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = subtitleColor,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (doneToday) Icon(Icons.Default.Check, contentDescription = null, tint = GREEN)
@@ -762,19 +819,52 @@ private fun InfoPill(text: String) {
     )
 }
 
+/**
+ * Прогресс набора точками вместо строки «Приём 1 из 3»: выпито — зелёные, пропущено — серые с крестом,
+ * следующий — контур primary, остальные — контур. Текст остаётся для TalkBack.
+ */
+@Composable
+fun SetDots(statuses: List<DoseStatus?>, nextIndex: Int, modifier: Modifier = Modifier) {
+    val s = Lang.s
+    val outline = MaterialTheme.colorScheme.outline
+    val primary = MaterialTheme.colorScheme.primary
+    val skipped = MaterialTheme.colorScheme.outlineVariant
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.semantics { contentDescription = s.intakeOf(nextIndex.coerceAtLeast(1), statuses.size) },
+    ) {
+        statuses.forEachIndexed { i, status ->
+            val isNext = i == nextIndex - 1
+            val dot = Modifier.size(11.dp)
+            when (status) {
+                DoseStatus.TAKEN -> Box(dot.background(GREEN, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(8.dp))
+                }
+                DoseStatus.SKIPPED -> Box(dot.background(skipped, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Close, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(8.dp))
+                }
+                else -> Box(dot.border(if (isNext) 2.dp else 1.dp, if (isNext) primary else outline, CircleShape))
+            }
+        }
+    }
+}
+
 @Composable
 private fun MedCard(
     row: MedRow,
     now: Long,
     awake: Boolean,
     compact: Boolean,
+    highlighted: Boolean,
+    snoozeOptions: List<Int>,
     onTake: (Long) -> Unit,
     onTakeNow: (Long) -> Unit,
     onSkip: (Long) -> Unit,
+    onSnooze: (Long, Int) -> Unit,
     onEdit: (Long) -> Unit,
     onLongPress: (MedRow) -> Unit,
     cardModifier: Modifier = Modifier,
-    dragHandleModifier: Modifier = Modifier,
 ) {
     val s = Lang.s
     val next = row.nextDose
@@ -794,25 +884,33 @@ private fun MedCard(
     fun takeChecked(d: Dose) {
         if (d.plannedAt - System.currentTimeMillis() > EARLY_TAKE_THRESHOLD_MS) earlyDose = d else onTake(d.id)
     }
-    // Ждать еду можно не бесконечно: через MEAL_WAIT_MAX_MS будильник звонит и без «Еда» — карточка краснеет вместе с ним.
+    // Степени опоздания: до времени — нейтрально; наступило — янтарный «ждёт приёма»; больше OVERDUE_GRACE_MS
+    // (будильник уже перестал звонить) — красный. Ждать еду можно не бесконечно: через MEAL_WAIT_MAX_MS
+    // будильник звонит и без «Еда» — это уже просрочка. Отложенный приём — ждёт, не краснеет.
+    val snoozed = row.snoozedUntil != null
     val mealTimedOut = row.waitsMeal && next != null && now - next.plannedAt >= MEAL_WAIT_MAX_MS
-    val overdue = next != null && next.plannedAt <= now && (!row.waitsMeal || mealTimedOut)
+    val due = next != null && next.plannedAt <= now && !snoozed && (!row.waitsMeal || mealTimedOut)
+    val late = due && (mealTimedOut || now - next.plannedAt >= OVERDUE_GRACE_MS)
     val done = row.dueToday && next == null && row.takenToday > 0
     val hasPlan = next != null || row.takenToday > 0 || row.skippedToday > 0
+    val amber = amberText()
 
     val border = when {
+        highlighted -> BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
         row.med.asNeeded || !row.dueToday || !awake || !hasPlan -> null
         next == null && row.skippedToday > 0 -> BorderStroke(2.dp, AMBER)
         next == null && row.takenToday > 0 -> BorderStroke(2.dp, GREEN)
-        row.takenToday > 0 -> BorderStroke(2.dp, AMBER)
-        else -> BorderStroke(2.dp, RED)
+        late -> BorderStroke(2.dp, RED)
+        due || snoozed -> BorderStroke(2.dp, AMBER)
+        else -> null
     }
 
     // Факты о лекарстве — отдельными метками, чтобы длинный набор переносился аккуратно.
     val pills = buildList {
-        add(listOf(s.formName(row.med.form), row.med.doseInfo).filter { it.isNotBlank() }.joinToString(" "))
-        add(s.perIntake(formatAmount(row.med.dosesPerIntake, row.med.form)))
-        // Связь с едой — такие же факты, как форма и дозировка; каждое правило своей меткой.
+        // Форма показана иконкой; словами — только своя форма, у которой иконка общая.
+        if (row.med.form !in MED_FORMS) add(row.med.form)
+        add(s.amountFact(row.med.dosesPerIntake, row.med.form, row.med.doseInfo))
+        // Связь с едой — такие же факты, как дозировка; каждое правило своей меткой.
         s.mealRelationParts(row.med.afterMealMinutes, row.med.beforeMealMinutes, row.med.mealCalories).forEach { add(it) }
         if (row.med.byClock) {
             add(s.byClockShort + " " + row.med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) })
@@ -833,6 +931,7 @@ private fun MedCard(
             )
         }
     }
+    val showDots = row.setStatuses.isNotEmpty() && row.dueToday && awake && hasPlan
 
     Card(
         cardModifier
@@ -841,7 +940,7 @@ private fun MedCard(
         border = border,
         colors = CardDefaults.cardColors(
             containerColor = when {
-                overdue -> MaterialTheme.colorScheme.errorContainer
+                late -> MaterialTheme.colorScheme.errorContainer
                 // Не surfaceVariant: на нём метки-«таблетки» того же цвета сливались с фоном.
                 done -> MaterialTheme.colorScheme.surfaceContainer
                 else -> MaterialTheme.colorScheme.surface
@@ -850,10 +949,19 @@ private fun MedCard(
     ) {
         Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = if (compact) 8.dp else 12.dp)) {
             val showTime = next != null && awake && row.dueToday
-            val timeColor = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-            val subColor = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+            val timeColor = when {
+                late -> MaterialTheme.colorScheme.error
+                due || snoozed -> amber
+                else -> MaterialTheme.colorScheme.onSurface
+            }
+            val subColor = when {
+                late -> MaterialTheme.colorScheme.error
+                due || snoozed -> amber
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
             val subText = when {
                 next == null -> ""
+                snoozed -> s.snoozedUntilShort(formatClock(row.snoozedUntil!!))
                 mealTimedOut -> s.mealNotMarked
                 // «ждёт «Еда»» — только когда время уже наступило; до того полезнее обратный отсчёт.
                 row.waitsMeal && next.plannedAt <= now -> s.waitsMealShort
@@ -901,10 +1009,7 @@ private fun MedCard(
                         modifier = Modifier.padding(start = 6.dp),
                     )
                 }
-                // Ручка перетаскивания — полноценная цель 48 dp и подпись для TalkBack.
-                Box(dragHandleModifier.size(48.dp), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.DragHandle, contentDescription = s.dragHandle, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
-                }
+                Spacer(Modifier.width(6.dp))
                 if (compact) {
                     when {
                         row.med.asNeeded -> FilledTonalIconButton(onClick = { onTakeNow(row.med.id) }) { Icon(Icons.Default.Check, contentDescription = s.takeNow) }
@@ -943,31 +1048,37 @@ private fun MedCard(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.padding(end = 8.dp),
             ) {
+                // В сокращённом режиме точки прогресса живут в ряду меток: отдельной строки у него нет.
+                if (compact && showDots) SetDots(row.setStatuses, row.nextIndexInSet, Modifier.padding(vertical = 5.dp))
                 pills.forEach { InfoPill(it) }
             }
 
             if (compact) return@Column
 
+            // Комментарий — подсказка, а не кнопка: строка с иконкой, без плашки.
             if (row.med.comment.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    row.med.comment,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(end = 8.dp)
-                        .background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                )
+                Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(end = 8.dp)) {
+                    Icon(
+                        Icons.Outlined.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp).padding(top = 1.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(row.med.comment, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
 
             Spacer(Modifier.height(10.dp))
 
-            Box(Modifier.fillMaxWidth().padding(end = 8.dp)) {
+            Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
+                if (showDots) {
+                    SetDots(row.setStatuses, row.nextIndexInSet)
+                    Spacer(Modifier.height(8.dp))
+                }
                 when {
-                    row.med.asNeeded -> Column {
+                    row.med.asNeeded -> {
                         if (row.takenToday > 0) {
                             StatusLine(s.takenTodayCount(row.takenToday))
                             Spacer(Modifier.height(8.dp))
@@ -984,23 +1095,34 @@ private fun MedCard(
                     // Закрытый набор с пропуском — не «всё выпито»: пишем честно, сколько выпито.
                     next == null && row.takenToday < row.totalToday -> StatusLine(s.setClosedPartial(row.takenToday, row.totalToday))
                     next == null -> StatusLine(s.allDone(row.takenToday, row.totalToday))
-                    else -> Column {
-                        // Счётчик своей строкой: в одном ряду с двумя кнопками ему оставалось несколько dp.
-                        Text(
-                            s.intakeOf(row.nextIndexInSet, row.totalToday),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedButton(onClick = { onSkip(next.id) }, modifier = Modifier.weight(1f).height(44.dp)) {
-                                Text(s.skip, maxLines = 1, softWrap = false)
+                    else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { onSkip(next.id) }, modifier = Modifier.weight(1f).height(44.dp)) {
+                            Text(s.skip, maxLines = 1, softWrap = false)
+                        }
+                        // «Отложить» — когда время наступило: за рулём, в душе, ещё не поели.
+                        if (next.plannedAt <= now && !row.waitsMeal) {
+                            var menu by remember { mutableStateOf(false) }
+                            Box {
+                                OutlinedIconButton(onClick = { menu = true }, modifier = Modifier.size(44.dp)) {
+                                    Icon(Icons.Default.Snooze, contentDescription = s.snoozeBtn)
+                                }
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    snoozeOptions.forEach { minutes ->
+                                        DropdownMenuItem(
+                                            text = { Text(s.snoozeFor(s.duration(minutes)), maxLines = 1, softWrap = false) },
+                                            onClick = {
+                                                menu = false
+                                                onSnooze(next.id, minutes)
+                                            },
+                                        )
+                                    }
+                                }
                             }
-                            Button(onClick = { takeChecked(next) }, modifier = Modifier.weight(1f).height(44.dp)) {
-                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(s.took, maxLines = 1, softWrap = false)
-                            }
+                        }
+                        Button(onClick = { takeChecked(next) }, modifier = Modifier.weight(1f).height(44.dp)) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.took, maxLines = 1, softWrap = false)
                         }
                     }
                 }

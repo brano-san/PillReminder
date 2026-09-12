@@ -16,7 +16,7 @@ class BackupTooNewException : Exception()
  */
 object Backup {
 
-    const val JSON_VERSION = 3
+    const val JSON_VERSION = 4
 
     suspend fun exportJson(db: AppDatabase): String {
         val root = JSONObject()
@@ -105,7 +105,9 @@ object Backup {
                         JSONObject()
                             .put("title", v.title)
                             .put("comment", v.comment)
-                            .put("atMillis", v.atMillis),
+                            .put("atMillis", v.atMillis)
+                            .put("place", v.place)
+                            .put("remind", v.remind),
                     )
                 }
             },
@@ -294,6 +296,8 @@ object Backup {
                     title = o.getString("title"),
                     comment = o.optString("comment"),
                     atMillis = o.getLong("atMillis"),
+                    place = o.optString("place"),
+                    remind = o.optBoolean("remind", true),
                 ),
             )
         }

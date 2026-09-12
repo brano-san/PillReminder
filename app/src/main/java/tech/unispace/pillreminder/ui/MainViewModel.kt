@@ -57,6 +57,10 @@ data class MedRow(
     val linkedParentName: String? = null,
     /** Ближайший приём «после еды» ждёт кнопку «Еда»: будильник не звонит, карточка не краснеет. */
     val waitsMeal: Boolean = false,
+    /** Ближайший приём отложен кнопкой «Отложить» до этого момента; карточка пишет «отложено до …» и не краснеет. */
+    val snoozedUntil: Long? = null,
+    /** Статусы приёмов текущего набора по порядку (null — приём ещё не создан) — для точек прогресса. */
+    val setStatuses: List<DoseStatus?> = emptyList(),
 )
 
 data class HomeState(
@@ -84,6 +88,16 @@ fun currentSet(doses: List<Dose>, size: Int): List<Dose> {
     val maxIndex = doses.maxOfOrNull { it.indexInDay } ?: return emptyList()
     val start = maxIndex / n * n
     return doses.filter { it.indexInDay >= start }
+}
+
+/**
+ * Статусы текущего набора по позициям 0..size-1 (null — приёма с таким номером ещё нет): точки прогресса
+ * на карточке рисуются по нему, а не по счётчикам «выпито/пропущено» — иначе порядок точек не совпадал бы с порядком приёмов.
+ */
+fun setStatuses(set: List<Dose>, size: Int): List<DoseStatus?> {
+    val n = size.coerceAtLeast(1)
+    val start = set.minOfOrNull { it.indexInDay }?.let { it / n * n } ?: 0
+    return (0 until n).map { i -> set.firstOrNull { it.indexInDay - start == i }?.status }
 }
 
 /**
@@ -130,8 +144,8 @@ data class JournalState(
     val formById: Map<Long, String> = emptyMap(),
 )
 
-/** Сводка одного дня для тепловой карты. */
-data class DayHeat(val taken: Int, val planned: Int)
+/** Сводка одного дня для тепловой карты; [pending] — приёмы, время которых ещё не пришло (день идёт). */
+data class DayHeat(val taken: Int, val planned: Int, val pending: Int = 0)
 
 /** Трекер и все его записи (новые первыми). */
 data class TrackerRow(
@@ -228,6 +242,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         linkedParentName = med.linkedToMedId?.let { nameById[it] ?: Lang.s.deletedPill },
                         // То же правило, что ставит будильник в Planner: карточка и звонок не должны расходиться.
                         waitsMeal = next != null && !mealSatisfied(med, next, list, meals, wake?.wakeAt),
+                        snoozedUntil = next?.snoozedUntil(now),
+                        setStatuses = if (med.asNeeded) emptyList() else setStatuses(set, size),
                     )
                 }
                 val medsById = meds.associateBy { it.id }
@@ -289,6 +305,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 DayHeat(
                     taken = decided.count { it.status == DoseStatus.TAKEN },
                     planned = decided.size,
+                    pending = list.size - decided.size,
                 )
             }
             HeatmapState(monthStart = start, days = days)
@@ -387,14 +404,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val id = db.trackerDao().upsert(toSave)
         TrackerAlarms.reschedule(getApplication(), db)
         onDone(if (toSave.id == 0L) id else toSave.id)
-    }
-
-    /** «Создать все три»: трекеры заводятся сразу, без стопки мастеров. */
-    fun createTrackers(types: List<String>, onDone: () -> Unit = {}) = viewModelScope.launch {
-        val have = db.trackerDao().getAll().map { it.type }.toSet()
-        types.filter { it !in have }.forEach { db.trackerDao().upsert(Tracker(type = it, startEpochDay = today())) }
-        TrackerAlarms.reschedule(getApplication(), db)
-        onDone()
     }
 
     fun deleteTracker(id: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
@@ -574,6 +583,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun skip(doseId: Long) = viewModelScope.launch { planner.markSkipped(doseId) }
 
     fun undo(doseId: Long) = viewModelScope.launch { planner.undo(doseId) }
+
+    /** «Отложить» с карточки: момент живёт в приёме, как и у кнопки в шторке. */
+    fun snooze(doseId: Long, minutes: Int) = viewModelScope.launch { planner.snooze(doseId, minutes) }
 
     /** «Принять сейчас»: возвращает id записи для снекбара с отменой. */
     fun takeNow(medId: Long, onDone: (Long) -> Unit = {}) = viewModelScope.launch {

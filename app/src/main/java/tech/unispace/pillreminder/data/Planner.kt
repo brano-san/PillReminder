@@ -31,8 +31,11 @@ fun epochDayOf(millis: Long): Long =
 /** Как долго последняя еда влияет на сдвиг приёмов. */
 private const val MEAL_RELEVANT_MS = 12 * 60 * 60_000L
 
-/** Насколько просроченный приём ещё имеет смысл озвучивать будильником. */
-private const val OVERDUE_GRACE_MS = 2 * 60 * 60_000L
+/**
+ * Насколько просроченный приём ещё имеет смысл озвучивать будильником. Та же граница делит «ждёт приёма»
+ * (янтарный) и «просрочен» (красный) на карточке и схеме дня: краснеем ровно тогда, когда перестали звонить.
+ */
+const val OVERDUE_GRACE_MS = 2 * 60 * 60_000L
 
 /**
  * За сколько до планового времени отметка «выпил» считается преждевременной: диалог «Ещё рано»
@@ -177,6 +180,15 @@ class Planner(private val context: Context, private val db: AppDatabase) {
     suspend fun recordMeal(now: Long = System.currentTimeMillis()) = lock.withLock {
         // Историю еды не чистим: она видна в журнале, на схеме дня и уходит в бэкап.
         mealDao.insert(MealEvent(atMillis = now))
+        // Приёмы «после еды» ждали кнопку: их план сейчас поменяется, поэтому отложенное напоминание
+        // и счёт повторов (страховка «через 3 часа») начинаются заново — иначе будильник остался бы на 3 часа.
+        val day = cycleDay(now)
+        val medsById = meds.getAllIncludingInactive().associateBy { it.id }
+        val waiting = doses.getDay(day).filter { d ->
+            d.status == DoseStatus.PENDING && (d.remindAt != null || d.attempt > 0) &&
+                medsById[d.medId]?.let { it.afterMealMinutes > 0 && !it.byClock } == true
+        }
+        if (waiting.isNotEmpty()) doses.updateAll(waiting.map { it.copy(remindAt = null, attempt = 0) })
         rescheduleAlarmsLocked()
     }
 
@@ -624,12 +636,14 @@ class Planner(private val context: Context, private val db: AppDatabase) {
                 stale += dose
                 continue
             }
-            // Приём «после еды» без отметки «Еда» ждёт еду и не звонит; страховка — напомнить
-            // всё же через MEAL_WAIT_MAX_MS, иначе забытая кнопка стоила бы пропущенного приёма.
+            // Приём «после еды» без отметки «Еда» не звонит будильником: в плановое время придёт мягкое
+            // напоминание «поели? нажмите «Еда»» (ReminderReceiver), а страховка — обычное напоминание
+            // через MEAL_WAIT_MAX_MS, иначе забытая кнопка стоила бы пропущенного приёма.
             val gated = !mealSatisfied(med, dose, relevant, meals, wake?.wakeAt)
-            val due = if (gated) dose.plannedAt + MEAL_WAIT_MAX_MS else dose.plannedAt
+            val due = if (gated && dose.plannedAt <= now) dose.plannedAt + MEAL_WAIT_MAX_MS else dose.plannedAt
             // План ушёл в будущее («Еда» подвинула приём) — старое уведомление в шторке больше не правда.
-            if (due > now) Notifications.dismiss(context, dose.id)
+            // Напоминание о еде у приёма с наступившим временем при этом остаётся висеть.
+            if (dose.plannedAt > now) Notifications.dismiss(context, dose.id)
             val remindAt = dose.remindAt
             val at = when {
                 due > now -> due

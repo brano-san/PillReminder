@@ -173,14 +173,19 @@ private fun JournalTab(
             item(key = "adherence") {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            Lang.s.streakTitle,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(Lang.s.streakDays(adherence.streak), fontWeight = FontWeight.SemiBold)
+                    // Серия хвалит за успех; ноль — не «неудача», а нейтральное приглашение начать.
+                    if (adherence.streak > 0) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                Lang.s.streakTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text("🔥 " + Lang.s.streakDays(adherence.streak), fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        Text(Lang.s.streakStartToday, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (adherence.perMed.isNotEmpty()) {
                         Text(Lang.s.adherenceTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
@@ -470,14 +475,19 @@ private fun HeatCell(
 ) {
     val hasData = !isFuture && heat != null && heat.planned > 0
     val ratio = if (hasData) heat!!.taken.toFloat() / heat.planned else 0f
+    // Сегодня день ещё идёт: пока есть будущие приёмы или выпито не всё, клетка бирюзовая «в процессе»,
+    // а не красная — штрафовать заранее нечего. Зелёной она становится, только когда всё выпито.
+    val inProgress = isToday && !(hasData && ratio >= 1f && heat!!.pending == 0)
     // Зелёный — день закрыт полностью, оранжевый — были пропуски, красный — не выпито ничего.
     val background = when {
+        inProgress -> MaterialTheme.colorScheme.primaryContainer
         !hasData -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ratio == 0f -> Color(0xFFE53935).copy(alpha = 0.55f)
         ratio >= 1f -> Color(0xFF2E7D32).copy(alpha = 0.85f)
         else -> Color(0xFFEF6C00).copy(alpha = 0.35f + 0.45f * ratio)
     }
     val textColor = when {
+        inProgress -> MaterialTheme.colorScheme.onPrimaryContainer
         !hasData -> MaterialTheme.colorScheme.onSurface
         ratio >= 0.5f || ratio == 0f -> Color.White
         else -> Color(0xFF1B1B1B)

@@ -10,6 +10,7 @@ import kotlin.math.abs
 import tech.unispace.pillreminder.container
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
+import tech.unispace.pillreminder.data.MEAL_WAIT_MAX_MS
 import tech.unispace.pillreminder.data.MINUTE_MS
 import tech.unispace.pillreminder.data.Planner
 import tech.unispace.pillreminder.data.Settings
@@ -65,9 +66,27 @@ class ReminderReceiver : BroadcastReceiver() {
                 }
                 val medsById = db.medicationDao().getAllIncludingInactive().associateBy { it.id }
                 val med = medsById[dose.medId] ?: return@launch
+                val private = settings.privateNotifications
+
+                val dayDoses = db.doseDao().getDay(dose.dayEpochDay)
+                val meals = db.mealDao().getAll().map { it.atMillis }
+                val wakeAt = db.wakeDao().getDay(dose.dayEpochDay)?.wakeAt
+                // Приём «после еды» дождался времени, а «Еда» не нажата: не звоним, а мягко просим отметить еду —
+                // забытая кнопка иначе стоила бы трёх часов тишины. Страховку через MEAL_WAIT_MAX_MS ставит пересборка.
+                val gated = !mealSatisfied(med, dose, dayDoses, meals, wakeAt)
+                if (gated && System.currentTimeMillis() - dose.plannedAt < MEAL_WAIT_MAX_MS) {
+                    val relation = Lang.s.mealRelation(med.afterMealMinutes, 0, med.mealCalories) ?: Lang.s.mealAfterNow
+                    Notifications.showMealPrompt(
+                        context = app,
+                        doseId = doseId,
+                        title = if (private) Lang.s.mealPromptTitleFallback else Lang.s.mealPromptTitle(med.name),
+                        text = Lang.s.mealPromptBody(relation),
+                    )
+                    planner.rescheduleAlarms()
+                    return@launch
+                }
 
                 // Режим конфиденциальности: ни названия, ни комментария в шторке.
-                val private = settings.privateNotifications
                 val text = if (private) {
                     ""
                 } else {
@@ -79,14 +98,13 @@ class ReminderReceiver : BroadcastReceiver() {
                             append(" · ")
                             append(it)
                         }
+                        // Три часа без «Еда»: напоминаем всё равно и честно пишем, почему.
+                        if (gated) append(" · ").append(Lang.s.mealNotMarked)
                     }
                 }
                 // Несколько таблеток в одну минуту — одно уведомление на всех, а не стопка.
                 // В группу берём только тех, кому действительно пора: приём, ждущий кнопку «Еда»,
                 // за компанию звонить не должен (тот же судья, что и у будильника — mealSatisfied).
-                val dayDoses = db.doseDao().getDay(dose.dayEpochDay)
-                val meals = db.mealDao().getAll().map { it.atMillis }
-                val wakeAt = db.wakeDao().getDay(dose.dayEpochDay)?.wakeAt
                 val batch = (
                     dayDoses.filter { d ->
                         d.status == DoseStatus.PENDING && abs(d.plannedAt - dose.plannedAt) <= GROUP_WINDOW_MS &&

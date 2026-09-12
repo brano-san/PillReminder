@@ -148,7 +148,7 @@ object Report {
                 if (visits.isEmpty()) appendLine(s.repNoData)
                 visits.sortedBy { it.atMillis }.forEach { v ->
                     val date = java.time.Instant.ofEpochMilli(v.atMillis).atZone(zone).toLocalDate().format(dateFmt)
-                    appendLine("• $date ${formatClock(v.atMillis)} — ${v.title}")
+                    appendLine("• $date ${formatClock(v.atMillis)} — ${v.title}" + if (v.place.isNotBlank()) " (${v.place})" else "")
                     if (v.comment.isNotBlank()) appendLine("  ${v.comment}")
                 }
             }

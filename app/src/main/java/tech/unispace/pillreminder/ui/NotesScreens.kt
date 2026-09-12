@@ -2,7 +2,6 @@
 
 package tech.unispace.pillreminder.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +33,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material3.Switch
+import tech.unispace.pillreminder.alarm.visitReminderMoments
+import tech.unispace.pillreminder.data.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import tech.unispace.pillreminder.data.Medication
@@ -56,7 +62,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -602,6 +607,14 @@ private fun VisitCard(
                     MaterialTheme.colorScheme.primary
                 },
             )
+            if (visit.place.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Place, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(visit.place, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
             if (visit.comment.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -778,9 +791,7 @@ fun NoteViewScreen(
     }
 }
 
-// ---------- Мастер заметки ----------
-
-private const val NOTE_PAGES = 3
+// ---------- Заметка: один экран ----------
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -801,7 +812,8 @@ fun EditNoteScreen(
     // Заметку можно привязать к таблетке: «от этой тошнит».
     var medId by remember { mutableStateOf<Long?>(null) }
     var meds by remember { mutableStateOf<List<Medication>>(emptyList()) }
-    var page by remember { mutableIntStateOf(0) }
+    // Описание, теги и таблетка нужны не каждой заметке — спрятаны под «Ещё», пока их не заполняли.
+    var more by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
 
@@ -813,6 +825,7 @@ fun EditNoteScreen(
                 body = n.body
                 tags = n.tags
                 medId = n.medId
+                more = n.description.isNotBlank() || n.tags.isNotBlank() || n.medId != null
                 val dt = n.atMillis.toLocalDateTime()
                 date = dt.toLocalDate()
                 time = dt.toLocalTime()
@@ -822,11 +835,14 @@ fun EditNoteScreen(
         meds = vm.activeMeds()
     }
 
+    val canSave = title.isNotBlank() || body.isNotBlank()
+
     fun save() {
         vm.saveNote(
             Note(
                 id = noteId,
-                title = title.trim().ifBlank { s.untitledNote },
+                // Без заголовка — первая строка текста: список заметок не должен пестрить «Без названия».
+                title = title.trim().ifBlank { body.trim().lineSequence().firstOrNull()?.take(60)?.trim().orEmpty() }.ifBlank { s.untitledNote },
                 description = description.trim(),
                 body = body.trim(),
                 tags = tags.split(',').map { it.trim() }.filter { it.isNotBlank() }.joinToString(", "),
@@ -854,58 +870,35 @@ fun EditNoteScreen(
 
     Scaffold(
         topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(if (isNew) s.newNote else s.editNote)
-                            Text(
-                                s.stepOf(page + 1, NOTE_PAGES),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { if (page == 0) onDone() else page-- }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = onDone) {
-                            Icon(Icons.Default.Close, contentDescription = s.closeNoSave)
-                        }
-                    },
-                )
-                LinearProgressIndicator(
-                    progress = { (page + 1f) / NOTE_PAGES },
-                    modifier = Modifier.fillMaxWidth(),
-                    gapSize = 0.dp,
-                    drawStopIndicator = {},
-                )
-            }
+            TopAppBar(
+                title = { Text(if (isNew) s.newNote else s.editNote) },
+                navigationIcon = {
+                    IconButton(onClick = onDone) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
+                    }
+                },
+                actions = {
+                    // Галочка в шапке: короткая мысль записывается в два касания.
+                    IconButton(onClick = { save() }, enabled = canSave) {
+                        Icon(Icons.Default.Check, contentDescription = s.save)
+                    }
+                },
+            )
         },
         bottomBar = {
-            // Системная «назад» ведёт на шаг назад, как стрелка в шапке, а не выбрасывает из мастера с набранным текстом.
-            BackHandler(enabled = page > 0) { page-- }
-            // imePadding поднимает кнопки над клавиатурой.
+            // imePadding поднимает кнопку над клавиатурой.
             Row(
                 Modifier
                     .fillMaxWidth()
                     .imePadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (page > 0) {
-                    OutlinedButton(onClick = { page-- }, modifier = Modifier.height(48.dp)) {
-                        Text(s.back, maxLines = 1, softWrap = false)
-                    }
-                }
                 Button(
-                    onClick = { if (page == NOTE_PAGES - 1) save() else page++ },
+                    onClick = { save() },
+                    enabled = canSave,
                     modifier = Modifier.weight(1f).height(48.dp),
                 ) {
-                    Text(if (page == NOTE_PAGES - 1) s.save else s.next, maxLines = 1, softWrap = false)
+                    Text(s.save, maxLines = 1, softWrap = false)
                 }
             }
         },
@@ -921,107 +914,81 @@ fun EditNoteScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Spacer(Modifier.height(8.dp))
-            when (page) {
-                0 -> {
-                    Text(s.noteNameQ, style = MaterialTheme.typography.headlineSmall)
-                    OutlinedTextField(
-                        colors = fieldColors(),
-                        value = title,
-                        onValueChange = { title = it },
-                        label = { Text(s.nameLabel) },
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        s.noteTimeSection,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(
-                            onClick = { showDatePicker = true },
-                            modifier = Modifier.weight(1.4f).height(52.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.CalendarMonth,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(date.format(noteDateFmt))
-                        }
-                        OutlinedButton(
-                            onClick = { showTimePicker = true },
-                            modifier = Modifier.weight(1f).height(52.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.Schedule,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(time.format(noteTimeFmt))
-                        }
-                    }
-                    Text(
-                        s.noteTimeHint,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            OutlinedTextField(
+                colors = fieldColors(),
+                value = title,
+                onValueChange = { title = it },
+                label = { Text(s.nameLabel) },
+                placeholder = { Text(s.noteTitlePlaceholder) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                colors = fieldColors(),
+                value = body,
+                onValueChange = { body = it },
+                label = { Text(s.noteBodyLabel) },
+                placeholder = { Text(s.noteBodyPlaceholder) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                minLines = 6,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(
+                    onClick = { showDatePicker = true },
+                    modifier = Modifier.weight(1.4f).height(52.dp),
+                ) {
+                    Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(date.format(noteDateFmt))
                 }
-
-                1 -> {
-                    Text(s.noteDescQ, style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        s.noteDescBody,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedTextField(
-                        colors = fieldColors(),
-                        value = description,
-                        onValueChange = { description = it },
-                        label = { Text(s.noteDescLabel) },
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = tags,
-                        onValueChange = { tags = it },
-                        label = { Text(Lang.s.noteTagsLabel) },
+                OutlinedButton(
+                    onClick = { showTimePicker = true },
+                    modifier = Modifier.weight(1f).height(52.dp),
+                ) {
+                    Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(time.format(noteTimeFmt))
+                }
+            }
+            TextButton(onClick = { more = !more }, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                Icon(if (more) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(s.noteMoreBtn, maxLines = 1, softWrap = false)
+            }
+            if (more) {
+                OutlinedTextField(
+                    colors = fieldColors(),
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text(s.noteDescLabel) },
+                    supportingText = { Text(s.noteDescBody) },
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                        singleLine = true,
-                        colors = fieldColors(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (meds.isNotEmpty()) {
-                        Text(Lang.s.noteMedLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(selected = medId == null, onClick = { medId = null }, label = { Text(Lang.s.noteMedNone) })
-                            meds.forEach { med ->
-                                FilterChip(
-                                    selected = medId == med.id,
-                                    onClick = { medId = med.id },
-                                    label = { Text(med.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                )
-                            }
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = tags,
+                    onValueChange = { tags = it },
+                    label = { Text(s.noteTagsLabel) },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                    singleLine = true,
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (meds.isNotEmpty()) {
+                    Text(s.noteMedLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        FilterChip(selected = medId == null, onClick = { medId = null }, label = { Text(s.noteMedNone, maxLines = 1, softWrap = false) })
+                        meds.forEach { med ->
+                            FilterChip(
+                                selected = medId == med.id,
+                                onClick = { medId = med.id },
+                                label = { Text(med.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            )
                         }
                     }
-                }
-
-                2 -> {
-                    Text(s.noteBodyQ, style = MaterialTheme.typography.headlineSmall)
-                    OutlinedTextField(
-                        colors = fieldColors(),
-                        value = body,
-                        onValueChange = { body = it },
-                        label = { Text(s.noteBodyLabel) },
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                        minLines = 8,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                 }
             }
             Spacer(Modifier.height(24.dp))
@@ -1035,23 +1002,31 @@ fun EditNoteScreen(
 fun EditVisitScreen(
     vm: MainViewModel,
     visitId: Long,
+    /** «Изменить сроки»: за сколько напоминать — общая настройка, живёт в «Настройках → Визиты». */
+    onOpenReminderSettings: () -> Unit,
     onDone: () -> Unit,
 ) {
     val s = Lang.s
+    val context = LocalContext.current
     val isNew = visitId == 0L
     var loaded by remember { mutableStateOf(isNew) }
     var title by remember { mutableStateOf("") }
+    var place by remember { mutableStateOf("") }
     var comment by remember { mutableStateOf("") }
+    var remind by remember { mutableStateOf(true) }
     var date by remember { mutableStateOf(LocalDate.now().plusDays(1)) }
     var time by remember { mutableStateOf(LocalTime.of(12, 0)) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
+    val offsets = remember { Settings(context).visitOffsetsMinutes }
 
     LaunchedEffect(visitId) {
         if (!isNew) {
             vm.loadVisit(visitId)?.let { v ->
                 title = v.title
+                place = v.place
                 comment = v.comment
+                remind = v.remind
                 val dt = v.atMillis.toLocalDateTime()
                 date = dt.toLocalDate()
                 time = dt.toLocalTime()
@@ -1060,14 +1035,17 @@ fun EditVisitScreen(
         }
     }
 
+    val atMillis = LocalDateTime.of(date, time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
     fun save() {
         vm.saveVisit(
             DoctorVisit(
                 id = visitId,
                 title = title.trim().ifBlank { s.visitNotifTitle },
                 comment = comment.trim(),
-                atMillis = LocalDateTime.of(date, time)
-                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                atMillis = atMillis,
+                place = place.trim(),
+                remind = remind,
             ),
         ) { onDone() }
     }
@@ -1157,15 +1135,49 @@ fun EditVisitScreen(
                     Text(time.format(noteTimeFmt))
                 }
             }
+            // Адрес и кабинет: перед выходом это нужнее всего, поэтому они и на карточке, и в уведомлении.
+            OutlinedTextField(
+                colors = fieldColors(),
+                value = place,
+                onValueChange = { place = it },
+                label = { Text(s.visitPlaceLabel) },
+                placeholder = { Text(s.visitPlacePlaceholder) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
             OutlinedTextField(
                 colors = fieldColors(),
                 value = comment,
                 onValueChange = { comment = it },
                 label = { Text(s.visitCommentLabel) },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                minLines = 3,
+                minLines = 2,
                 modifier = Modifier.fillMaxWidth(),
             )
+            // Напоминание: переключатель и честный список моментов — иначе непонятно, когда именно придёт уведомление.
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(s.visitRemindTitle, fontWeight = FontWeight.SemiBold)
+                            Text(s.visitRemindBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = remind, onCheckedChange = { remind = it })
+                    }
+                    if (remind) {
+                        val moments = visitReminderMoments(atMillis, offsets, System.currentTimeMillis())
+                        Text(
+                            if (moments.isEmpty()) s.visitRemindNone else s.visitRemindAt(moments.joinToString(" · ") { formatNoteTime(it) }),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (moments.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        )
+                        TextButton(onClick = onOpenReminderSettings, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                            Text(s.visitRemindChange, maxLines = 1, softWrap = false)
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -1386,7 +1398,6 @@ fun EditLibraryScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Text(s.photoWhyHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             photoUri?.let { uri ->
                 UriImage(
                     uri = uri,
@@ -1411,6 +1422,8 @@ fun EditLibraryScreen(
                     }
                 }
             }
+            // Пояснение «зачем фото» — под кнопкой, к которой относится, а не над ней.
+            Text(s.photoWhyHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
         }
     }

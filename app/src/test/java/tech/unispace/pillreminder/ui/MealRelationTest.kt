@@ -39,8 +39,19 @@ class MealRelationTest {
 
     @Test
     fun caloriesOnlyWithAfterMeal() {
-        assertEquals("сразу после еды · еда от 300 ккал", RU.mealRelation(MEAL_NOW, 0, 300))
+        assertEquals("сразу после еды, еда от 300 ккал", RU.mealRelation(MEAL_NOW, 0, 300))
         assertEquals("за 30 мин до еды", RU.mealRelation(0, 30, 300))
-        assertEquals("right after a meal · meal of 300 kcal or more", EN.mealRelation(MEAL_NOW, 0, 300))
+        assertEquals("right after a meal, meal of 300 kcal or more", EN.mealRelation(MEAL_NOW, 0, 300))
+        // Калории склеены с правилом: одна метка, а не две спорящие.
+        assertEquals(1, RU.mealRelationParts(30, 0, 400).size)
+    }
+
+    @Test
+    fun amountFactMergesDoseAndCount() {
+        assertEquals("10 мг × 2 таб.", RU.amountFact(2.0, "Таблетка", "10 мг"))
+        assertEquals("0.5 таб.", RU.amountFact(0.5, "Таблетка", ""))
+        assertEquals("3 капли", RU.amountFact(3.0, "Капли", ""))
+        assertEquals("10 mg × 2 tab.", EN.amountFact(2.0, "Таблетка", "10 mg"))
+        assertEquals("1 injection", EN.amountFact(1.0, "Инъекция", " "))
     }
 }

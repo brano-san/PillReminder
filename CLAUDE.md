@@ -45,8 +45,8 @@
 
 ## База данных
 
-- Схема v3, релиз 1.2 выпущен 13.09.2026 — **`MIGRATION_1_2` и `MIGRATION_2_3` зафиксированы**. Любое новое
-  поле = `version = 4` + отдельная `Migration(3, 4)`; дописывать в 2 → 3 больше нельзя.
+- Схема v4 (1.2.1, не выпущена): **`MIGRATION_1_2` и `MIGRATION_2_3` зафиксированы**, `MIGRATION_3_4`
+  (`visits.place`, `visits.remind`) пока дописывается. После выпуска 1.2.1 — `version = 5` + `Migration(4, 5)`.
   `fallbackToDestructiveMigrationOnDowngrade` оставлен.
 - **Релиз 1.0 выпущен, схема v1 зафиксирована.** Destructive-фолбэков нет: любое изменение
   entity = `version++` в `@Database` + явная `Migration(from, to)` в `AppDatabase.MIGRATIONS`
@@ -84,7 +84,7 @@
 - Новый BroadcastReceiver обязан быть в AndroidManifest.xml, иначе будильник молча
   не сработает. И его нужно восстановить в BootReceiver (перезагрузка стирает все будильники).
 - Диапазоны requestCode PendingIntent'ов (пересечение = молчаливая перезапись чужого):
-  - id дозы (int) — напоминания о приёмах (три action-интента различаются action+data);
+  - id дозы (int) — напоминания о приёмах (action-интенты «Выпито/Пропустить/Отложить/Еда» различаются action+data);
   - 500_000+ — уведомления визитов; будильники визитов — `hashCode("visit-$id-$offset")`;
   - 700_000+ — «таблетки заканчиваются»;
   - 820_000 + trackerId·MAX_ASK_TIMES + slot — трекеры; 801_001 — напоминание «я проснулся»;
@@ -124,7 +124,14 @@
   BootReceiver, отметка приёма) поддерживает расписание живым. `shiftFollowing` такие приёмы
   не двигает: время фиксировано.
 - Просроченный больше чем на `OVERDUE_GRACE_MS` (2 ч) приём будильником не озвучивается —
-  остаётся в списке дня молча.
+  остаётся в списке дня молча. **Та же константа делит цвета**: наступил и < 2 ч — янтарный (`DUE`), ≥ 2 ч — красный
+  (`OVERDUE`) на карточке (`MedCard`) и схеме дня (`TimelineState`). До времени — нейтрально; красить пока не просрочено нельзя.
+- **Напоминание о еде**: приём «после еды» без «Еда» в плановое время получает `Notifications.showMealPrompt` (кнопки
+  «Еда» = `ACTION_MEAL` → `recordMeal()`, «Выпито»), без цепочки повторов; `rescheduleAlarmsLocked` при `plannedAt <= now`
+  ставит страховку на `plannedAt + MEAL_WAIT_MAX_MS`, а `dismiss` делает только для `plannedAt > now` — иначе гасил бы само
+  напоминание. `recordMeal()` сбрасывает `remindAt/attempt` ожидавших приёмов.
+- **«Отложить» с карточки** = `Planner.snooze()` (attempt = 0). `Dose.snoozedUntil(now)` (DayTimeline.kt) — единственный
+  признак «отложено» для карточки и схемы: `remindAt` с `attempt > 0` — это цепочка повторов, не отложенное.
 - Промежуток по умолчанию задаёт `defaultIntervalMinutes(n)` в EditMedScreen.kt (2 → 12 ч, 3 → 8 ч,
   4 → 5 ч, ≥5 → 16 ч бодрствования ÷ (N−1)); смена числа приёмов идёт только через `setTimes()`.
 - «Выпил» раньше плана более чем на `EARLY_TAKE_THRESHOLD_MS` (1 ч) — через диалог «Ещё рано»
@@ -144,7 +151,9 @@
 - Вложенные вкладки — `HorizontalPager` + `TabRow`, синхронизированные (свайп работает).
 - Календарь истории: кнопка «к сегодня» появляется только вне текущего месяца (`ChronoUnit.MONTHS.between`).
 - Каждому подэкрану — свой Scaffold с TopAppBar и стрелкой назад; вкладкам — паддинги
-  из `tabPadding`.
+  из `tabPadding`. Заметка и визит — одноэкранные формы без пейджера (мастер по шагам — только у таблетки).
+- Визит: `DoctorVisit.remind = false` → `VisitAlarms.reschedule` только отменяет его будильники; список моментов на экране —
+  `visitReminderMoments()` (чистая, тест), те же смещения `Settings.visitOffsetsMinutes`.
 - Порядок нижних вкладок: Главная · Записи · Трекеры · История · Настройки —
   «полезное слева, редкое справа». **Больше пяти вкладок нельзя** (M3 NavigationBar);
   заметки, врачи и каталог живут внутри «Записей» (`RecordsScreen`, пейджер). Подписи
@@ -178,7 +187,7 @@
   (values + values-night) как `android:windowBackground` и Surface на всё окно в MainActivity —
   иначе под клавиатурой видна чёрная полоса.
 - Нижняя кнопка главного экрана — один слот на цикл: «Я проснулся», пока день не начат,
-  и «Ложусь спать», пока идёт. Ряд мелких действий (еда, отчёт, советы, туториал)
+  и «Ложусь спать», пока идёт. Блок «Отчёт · Советы · Туториал» — последний `item` ленты (после трекеров),
   прячется настройкой `Settings.showHomeActions`.
 - В макетах виджетов можно использовать только классы с аннотацией `@RemoteView`
   (LinearLayout, RelativeLayout, FrameLayout, TextView, Button, ImageView…). `Space` и `View`
@@ -190,8 +199,20 @@
   `setInt(bg, "setImageAlpha", …)`, цвет текста — `WidgetStyle.lightText`. `setBackgroundColor` не использовать:
   теряются скруглённые углы. `widget_bg.xml` остаётся бирюзовым — превью в системном списке рисует XML без кода.
   Любая настройка виджета заканчивается `PillWidgetProvider.refresh(context)`.
-- Схема дня на главной — `buildTimelineNodes()` (чистая функция, с тестом) + `DayTimeline` (ui/DayTimeline.kt).
-  Новый тип события дня = значение `TimelineKind` + ветки иконки и подписи в `TimelineNodeView`.
+- Настройки виджета — свой экран `WidgetSettingsScreen` (маршрут `setup/widget`), пункт меню — `SettingsNavCard`.
+  Предпросмотр берёт строки из `PillWidgetProvider.loadData()` (suspend, общий с самим виджетом). Режима текста «авто»
+  нет: `Settings.widgetText` читает старое `auto` как `WidgetStyle.textModeFor(color)`; палитра `WidgetStyle.presets`
+  ↔ `S.widgetColorNames` по индексу (тест).
+- Схема дня на главной — `buildTimelineNodes()` (чистая функция, с тестом) + `DayTimeline` (ui/DayTimeline.kt), отдельная
+  карточка под карточкой дня. Новый тип события дня = значение `TimelineKind` + ветки иконки и подписи в `TimelineNodeView`.
+  Подпись таблетки — только `timelinePillLabel(name, doseInfo)`; тап по кружку → `onPillTap(medId)` → подсветка карточки
+  (`highlightMedId`, индекс для прокрутки считает число элементов перед списком — новый `item` перед карточками = +1 там).
+- Точки прогресса набора — `setStatuses(set, size)` (MainViewModel.kt, тест) + `SetDots`; строка «Приём N из M» осталась
+  только как `contentDescription`.
+- Дозировка и количество на карточке, в итоге мастера и на виджете — только `s.amountFact(amount, form, doseInfo)`
+  («10 мг × 2 таб.»); метка формы словами — только для своей формы (не из `MED_FORMS`). Калории — внутри метки «после еды».
+- Порядок таблеток — `ReorderDialog` (стрелки) из меню долгого нажатия; перетаскивания в `LazyColumn` нет и возвращать его
+  не надо: `detectDragGestures` + `animateItem` конфликтовали с прокруткой («телепорт»).
 - Счётчик «N из M» на карточке — через срез `currentSet(doses, size)` (MainViewModel.kt): набор — по номерам
   `indexInDay`, а не по модулю выпитых; «по необходимости» считает все приёмы дня. Серия дней — `streakDays()`.
 - Из UI виджет обновляется `PillWidgetProvider.refreshAsync(context)`: `refresh` блокирует поток запросом к базе.
@@ -217,7 +238,8 @@
 ## Тесты
 
 - `./gradlew.bat :app:testDebugUnitTest` — JUnit 4 для чистой логики без Android: строки `RU`/`EN`,
-  `mealSatisfied`, `currentSet`, `streakDays`, `buildTimelineNodes`, `WidgetStyle`. Новая чистая функция = тест
+  `mealSatisfied`, `currentSet`, `setStatuses`, `streakDays`, `buildTimelineNodes`/`timelinePillLabel`, `amountFact`,
+  `visitReminderMoments`, `WidgetStyle`. Новая чистая функция = тест
   рядом в `app/src/test/java/…` (тот же пакет). Compose и Room в юнит-тестах недоступны — логику из них выносить.
 - Неиспользуемые ключи `S` удаляются (скрипт-проверка: ключ не встречается как `.key` вне Lang.kt и не нужен
   default-методам интерфейса). Мёртвые строки требуют перевода при каждой правке и вводят в заблуждение.
