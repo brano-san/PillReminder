@@ -11,9 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.container
 import tech.unispace.pillreminder.data.AppDatabase
-import tech.unispace.pillreminder.data.CYCLE_MAX_MS
 import tech.unispace.pillreminder.data.Settings
-import tech.unispace.pillreminder.data.today
+import tech.unispace.pillreminder.data.isActive
 import tech.unispace.pillreminder.ui.Lang
 import java.time.LocalDate
 import java.time.LocalTime
@@ -26,11 +25,9 @@ import java.time.ZoneId
  */
 object WakeReminder {
 
-    /** День уже идёт? Цикл живёт до CYCLE_MAX_MS с момента пробуждения, а не до полуночи. */
-    suspend fun cycleActive(db: AppDatabase): Boolean {
-        val last = db.wakeDao().latest() ?: return false
-        return System.currentTimeMillis() - last.wakeAt in 0 until CYCLE_MAX_MS
-    }
+    /** День уже идёт? То же определение, что у планировщика и главного экрана ([WakeEvent.isActive]). */
+    suspend fun cycleActive(db: AppDatabase): Boolean =
+        db.wakeDao().latest()?.isActive(System.currentTimeMillis()) == true
 
     private fun intent(context: Context): PendingIntent =
         PendingIntent.getBroadcast(
@@ -76,12 +73,14 @@ class WakeReminderReceiver : BroadcastReceiver() {
             try {
                 val db = app.container.db
                 if (!WakeReminder.cycleActive(db)) {
+                    // За этим уведомлением нет приёма — кнопки «Выпито/Пропустить/Отложить» ему не нужны.
                     Notifications.show(
                         context = app,
                         doseId = WAKE_NOTIF_ID,
                         title = Lang.s.wakeRemindNotifTitle,
                         text = Lang.s.wakeRemindNotifBody,
                         useAlarmChannel = Settings(app).alarmSound,
+                        withActions = false,
                     )
                 }
                 WakeReminder.schedule(app)

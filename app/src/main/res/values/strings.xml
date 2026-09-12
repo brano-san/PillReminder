@@ -3,7 +3,7 @@
     <string name="widget_preview_title">День приёма</string>
     <string name="widget_preview_line1">08:00  Витамин D</string>
     <string name="widget_preview_line2">12:00  Магний B6</string>
-    <string name="widget_take">Выпил</string>
+    <string name="widget_take">Выпито</string>
     <string name="widget_narrow_desc">День приёма · компактный</string>
     <string name="widget_wide_desc">День приёма · с кнопкой</string>
 </resources>

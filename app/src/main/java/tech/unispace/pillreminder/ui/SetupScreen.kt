@@ -25,13 +25,24 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Slider
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import kotlin.math.roundToInt
+import tech.unispace.pillreminder.widget.WidgetStyle
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -57,6 +68,7 @@ import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.Card
 import androidx.compose.material3.AlertDialog
@@ -71,6 +83,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -87,6 +100,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
@@ -195,13 +209,15 @@ fun SettingsMenuScreen(
         SettingsNavCard(
             icon = { Icon(Icons.Default.Shield, contentDescription = null, tint = primary) },
             title = s.privacyCard,
-            subtitle = s.privacyTitle,
+            // Подзаголовок — состояние, а не название настройки: «Скрывать названия» читалось как факт.
+            subtitle = if (settings.privateNotifications) s.privacyOnSub else s.privacyOffSub,
             onClick = onOpenPrivacy,
         )
         SettingsNavCard(
             icon = { Icon(Icons.Default.Inventory, contentDescription = null, tint = primary) },
             title = s.stockCard,
-            subtitle = s.lowStockTitle,
+            // «Таблетки заканчиваются» в меню выглядело как тревога при полных упаковках.
+            subtitle = s.stockCardSub(settings.lowStockThreshold),
             onClick = onOpenStock,
         )
         SettingsNavCard(
@@ -253,13 +269,13 @@ fun SettingsMenuScreen(
                             TextButton(onClick = {
                                 pickWidget = false
                                 manager.requestPinAppWidget(ComponentName(context, PillWidgetWideProvider::class.java), null, null)
-                            }) { Text(s.widgetWideName) }
+                            }) { Text(s.widgetWideName, maxLines = 1, softWrap = false) }
                         },
                         dismissButton = {
                             TextButton(onClick = {
                                 pickWidget = false
                                 manager.requestPinAppWidget(ComponentName(context, PillWidgetProvider::class.java), null, null)
-                            }) { Text(s.widgetNarrowName) }
+                            }) { Text(s.widgetNarrowName, maxLines = 1, softWrap = false) }
                         },
                     )
                 }
@@ -269,9 +285,13 @@ fun SettingsMenuScreen(
                             pickWidget = true
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(s.widgetAdd) }
+                    ) { Text(s.widgetAdd, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                 } else {
                     Text(s.widgetUnsupported, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                // Стиль виджета живёт во «Внешнем виде» — даём ссылку, чтобы его не искали здесь.
+                TextButton(onClick = onOpenCharts, modifier = Modifier.fillMaxWidth()) {
+                    Text(s.widgetStyleLink, maxLines = 1, softWrap = false)
                 }
             }
         }
@@ -289,8 +309,10 @@ fun SettingsMenuScreen(
                             Lang.code = code
                             settings.language = code
                             Notifications.createChannels(context)
+                            // Виджет читает язык только при перерисовке — иначе он до получаса остаётся на старом.
+                            PillWidgetProvider.refreshAsync(context)
                         },
-                        label = { Text(label) },
+                        label = { Text(label, maxLines = 1, softWrap = false) },
                     )
                     Spacer(Modifier.width(8.dp))
                 }
@@ -457,13 +479,17 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                     OutlinedTextField(
                         value = repeatIntervalText,
                         onValueChange = { raw ->
-                            repeatIntervalText = raw
-                            raw.toIntOrNull()?.coerceIn(1, 120)?.let { v ->
+                            // Не обрезаем молча: вне диапазона — ошибка поля, значение не сохраняется.
+                            val digits = raw.filter { it.isDigit() }.take(3)
+                            repeatIntervalText = digits
+                            digits.toIntOrNull()?.takeIf { it in 1..120 }?.let { v ->
                                 repeatInterval = v
                                 settings.repeatIntervalMinutes = v
                             }
                         },
                         label = { Text(s.customIntervalLabel) },
+                        isError = repeatIntervalText.toIntOrNull()?.let { it !in 1..120 } ?: repeatIntervalText.isNotEmpty(),
+                        supportingText = { Text(s.rangeHint(1, 120)) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = fieldColors(),
@@ -615,15 +641,22 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
     }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { refresh++ }
 
+    var soundUri by remember { mutableStateOf(settings.soundUri) }
     val ringtoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             @Suppress("DEPRECATION")
             val uri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
             settings.soundUri = uri?.toString()
+            soundUri = settings.soundUri
             // Настройки канала неизменяемы — пересоздаём каналы под новую мелодию.
             settings.channelVersion = settings.channelVersion + 1
             Notifications.createChannels(context)
+            say(s.soundSaved)
         }
+    }
+    // Название выбранной мелодии — чтобы было видно, что именно сейчас играет.
+    val soundName = remember(soundUri) {
+        soundUri?.let { runCatching { RingtoneManager.getRingtone(context, Uri.parse(it))?.getTitle(context) }.getOrNull() } ?: s.soundDefault
     }
 
     SettingsSubScreen(s.soundScreenTitle, onBack, snackbars) {
@@ -650,26 +683,32 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(s.pickSound) }
+                ) { Text(s.pickSound, maxLines = 1, softWrap = false) }
+                Spacer(Modifier.height(6.dp))
+                Text(s.soundCurrent(soundName), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        if (fsiAllowed) Icons.Default.CheckCircle else Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        if (fsiAllowed) s.overlayOk else s.fsPermWarn,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                    )
+                // Отдельное разрешение на полноэкранные уведомления есть только с Android 14 —
+                // на старых версиях строка «разрешено» говорила бы о несуществующем пункте.
+                if (Build.VERSION.SDK_INT >= 34) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (fsiAllowed) Icons.Default.CheckCircle else Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            if (fsiAllowed) s.fsiOk else s.fsPermWarn,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
-                Spacer(Modifier.height(8.dp))
                 SwitchRow(s.fullScreenTitle, s.fullScreenBody, fullScreenAlarm) {
                     fullScreenAlarm = it
                     settings.fullScreenAlarm = it
@@ -720,8 +759,11 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                     } else {
                         FilledTonalButton(
                             onClick = {
-                                launcher.launch(
+                                // Через safeLaunch: не у каждой оболочки есть этот экран, без запасного варианта — падение.
+                                safeLaunch(
+                                    launcher,
                                     Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName)),
+                                    context,
                                 )
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -789,6 +831,7 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     // Пресеты тоже можно скрыть: кому-то не нужны «за неделю» и «за 3 дня».
     var hidden by remember { mutableStateOf(settings.visitOffsetsHidden) }
     val snackbars = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     fun apply(newSet: Set<Int>) {
         selected = newSet
@@ -819,8 +862,11 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                         )
                         Text(s.visitOffsetLabel(offset), modifier = Modifier.weight(1f))
                         // Убрать можно любую строку: своё время удаляется совсем, пресет — прячется.
+                        // Снекбар с «Вернуть»: вернуть спрятанный пресет иначе нечем.
                         IconButton(onClick = {
-                            if (offset in custom) {
+                            val wasCustom = offset in custom
+                            val wasSelected = offset in selected
+                            if (wasCustom) {
                                 custom = custom - offset
                                 settings.visitOffsetsCustom = custom
                             }
@@ -829,6 +875,19 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                                 settings.visitOffsetsHidden = hidden
                             }
                             apply(selected - offset)
+                            scope.launch {
+                                snackbars.currentSnackbarData?.dismiss()
+                                val result = snackbars.showSnackbar(s.visitOffsetHiddenMsg, actionLabel = s.undo)
+                                if (result == SnackbarResult.ActionPerformed) {
+                                    if (wasCustom) {
+                                        custom = custom + offset
+                                        settings.visitOffsetsCustom = custom
+                                    }
+                                    hidden = hidden - offset
+                                    settings.visitOffsetsHidden = hidden
+                                    if (wasSelected) apply(selected + offset)
+                                }
+                            }
                         }) {
                             Icon(Icons.Default.Close, contentDescription = s.delete)
                         }
@@ -987,11 +1046,13 @@ fun StockSettingsScreen(onBack: () -> Unit) {
                 OutlinedTextField(
                     value = thresholdText,
                     onValueChange = { raw ->
-                        thresholdText = raw
-                        raw.toIntOrNull()?.coerceIn(1, 100)?.let { settings.lowStockThreshold = it }
+                        val digits = raw.filter { it.isDigit() }.take(3)
+                        thresholdText = digits
+                        digits.toIntOrNull()?.takeIf { it in 1..100 }?.let { settings.lowStockThreshold = it }
                     },
                     label = { Text(s.thresholdShort) },
-                    supportingText = { Text(s.thresholdLabel) },
+                    isError = thresholdText.toIntOrNull()?.let { it !in 1..100 } ?: thresholdText.isNotEmpty(),
+                    supportingText = { Text(s.thresholdLabel + " " + s.rangeHint(1, 100) + ".") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     colors = fieldColors(),
@@ -1004,7 +1065,7 @@ fun StockSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-// ---------- Внешний вид: главный экран и мини-графики ----------
+// ---------- Внешний вид: главный экран, графики, виджет ----------
 
 @Composable
 fun ChartSettingsScreen(onBack: () -> Unit) {
@@ -1014,17 +1075,54 @@ fun ChartSettingsScreen(onBack: () -> Unit) {
     var miniText by remember { mutableStateOf(settings.miniTrackerPoints.toString()) }
     var compact by remember { mutableStateOf(settings.homeCompact) }
     var homeActions by remember { mutableStateOf(settings.showHomeActions) }
+    var timeline by remember { mutableStateOf(settings.showDayTimeline) }
     var smooth by remember { mutableStateOf(settings.chartSmooth) }
+    // Стиль виджета: каждое изменение сразу уходит на рабочий стол (в фоне — refresh читает базу).
+    var widgetColor by remember { mutableStateOf(settings.widgetColor) }
+    var widgetOpacity by remember { mutableStateOf(settings.widgetOpacity) }
+    var widgetText by remember { mutableStateOf(settings.widgetText) }
     val snackbars = remember { SnackbarHostState() }
 
     SettingsSubScreen(s.appearanceCard, onBack, snackbars) {
+        // Главный экран: режим карточек, ряд кнопок, схема дня — всё, что про него, в одной карточке.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text(s.homeSectionTitle, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                Text(s.homeModeLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FilterChip(
+                        selected = !compact,
+                        onClick = { compact = false; settings.homeCompact = false },
+                        label = { Text(s.homeFull, maxLines = 1, softWrap = false) },
+                    )
+                    FilterChip(
+                        selected = compact,
+                        onClick = { compact = true; settings.homeCompact = true },
+                        label = { Text(s.homeCompact, maxLines = 1, softWrap = false) },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                SwitchRow(s.homeActionsTitle, s.homeActionsBody, homeActions) {
+                    homeActions = it
+                    settings.showHomeActions = it
+                }
+                Spacer(Modifier.height(12.dp))
+                SwitchRow(s.timelineTitle, s.timelineBody, timeline) {
+                    timeline = it
+                    settings.showDayTimeline = it
+                }
+            }
+        }
+        // Графики: вид линии и число точек на мини-графике.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text(s.chartStyleTitle, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Text(s.chartStyleBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     FilterChip(
                         selected = smooth,
                         onClick = { smooth = true; settings.chartSmooth = true },
@@ -1037,45 +1135,126 @@ fun ChartSettingsScreen(onBack: () -> Unit) {
                     )
                 }
                 Spacer(Modifier.height(12.dp))
-                SwitchRow(s.homeActionsTitle, s.homeActionsBody, homeActions) {
-                    homeActions = it
-                    settings.showHomeActions = it
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-        }
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text(s.homeModeLabel, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = !compact,
-                        onClick = { compact = false; settings.homeCompact = false },
-                        label = { Text(s.homeFull) },
-                    )
-                    FilterChip(
-                        selected = compact,
-                        onClick = { compact = true; settings.homeCompact = true },
-                        label = { Text(s.homeCompact) },
-                    )
-                }
-            }
-        }
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
+                // Поле не обрезает молча: вне диапазона — красная рамка и подсказка, значение не сохраняется.
+                val miniValue = miniText.toIntOrNull()
                 OutlinedTextField(
                     value = miniText,
                     onValueChange = { raw ->
-                        miniText = raw
-                        raw.toIntOrNull()?.coerceIn(3, 60)?.let { settings.miniTrackerPoints = it }
+                        val digits = raw.filter { it.isDigit() }.take(2)
+                        miniText = digits
+                        digits.toIntOrNull()?.takeIf { it in 3..60 }?.let { settings.miniTrackerPoints = it }
                     },
                     label = { Text(s.miniPointsLabel) },
+                    isError = miniValue?.let { it !in 3..60 } ?: miniText.isNotEmpty(),
+                    supportingText = { Text(s.rangeHint(3, 60)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     colors = fieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+        }
+        // Виджет: цвет, прозрачность и цвет текста с живым предпросмотром.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                val lightText = WidgetStyle.lightText(widgetColor, widgetText)
+                val primaryText = Color(WidgetStyle.textColor(primary = true, light = lightText))
+                val secondaryText = Color(WidgetStyle.textColor(primary = false, light = lightText))
+                Text(s.widgetStyleTitle, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(s.widgetStyleBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                // Предпросмотр на двухцветной подложке: светлая и тёмная половины показывают читаемость
+                // на любых обоях, а не на цвете темы приложения. Состав — как у широкого виджета: строки, подстрока, кнопка.
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))) {
+                    Row(Modifier.matchParentSize()) {
+                        Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE6E6E6)))
+                        Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFF2B2B2B)))
+                    }
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp)
+                            .background(Color(widgetColor).copy(alpha = widgetOpacity / 100f), RoundedCornerShape(14.dp))
+                            .padding(12.dp),
+                    ) {
+                        Text(s.widgetTitle, style = MaterialTheme.typography.labelSmall, color = secondaryText)
+                        Text(s.widgetPreviewLine1, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1)
+                        Text(s.mealAfterNow, style = MaterialTheme.typography.labelSmall, color = secondaryText, maxLines = 1)
+                        Text(s.widgetPreviewLine2, color = primaryText, maxLines = 1)
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(if (lightText) Color(0x33FFFFFF) else Color(0x1A000000), RoundedCornerShape(12.dp))
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(s.widgetTake, style = MaterialTheme.typography.labelLarge, color = primaryText, maxLines = 1, softWrap = false)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(s.widgetColorTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    WidgetStyle.presets.forEachIndexed { i, argb ->
+                        FilterChip(
+                            selected = widgetColor == argb,
+                            onClick = {
+                                widgetColor = argb
+                                settings.widgetColor = argb
+                                PillWidgetProvider.refreshAsync(context)
+                            },
+                            label = { Text(s.widgetColorNames.getOrElse(i) { "" }, maxLines = 1, softWrap = false) },
+                            leadingIcon = {
+                                Box(
+                                    Modifier
+                                        .size(14.dp)
+                                        .background(Color(argb), CircleShape)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                                )
+                            },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                // Ползунок — про прозрачность (так думает пользователь), хранится непрозрачность.
+                Text(s.widgetTransparency(100 - widgetOpacity), style = MaterialTheme.typography.bodyMedium)
+                Slider(
+                    value = (100 - widgetOpacity).toFloat(),
+                    onValueChange = {
+                        widgetOpacity = (100 - it.roundToInt()).coerceIn(0, 100)
+                        settings.widgetOpacity = widgetOpacity
+                    },
+                    onValueChangeFinished = { PillWidgetProvider.refreshAsync(context) },
+                    valueRange = 0f..100f,
+                    steps = 9,
+                )
+                // На прозрачном фоне «Авто» гадает по невидимому цвету — подсказываем выбрать цвет текста руками.
+                if (widgetText == WidgetStyle.TEXT_AUTO && widgetOpacity < 50) {
+                    Text(s.widgetAutoHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(6.dp))
+                }
+                Text(s.widgetTextTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(
+                        WidgetStyle.TEXT_AUTO to s.widgetTextAuto,
+                        WidgetStyle.TEXT_LIGHT to s.widgetTextLight,
+                        WidgetStyle.TEXT_DARK to s.widgetTextDark,
+                    ).forEach { (mode, label) ->
+                        FilterChip(
+                            selected = widgetText == mode,
+                            onClick = {
+                                widgetText = mode
+                                settings.widgetText = mode
+                                PillWidgetProvider.refreshAsync(context)
+                            },
+                            label = { Text(label, maxLines = 1, softWrap = false) },
+                        )
+                    }
+                }
             }
         }
     }
@@ -1098,7 +1277,13 @@ fun DeliverySettingsScreen(onBack: () -> Unit) {
         }
     }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { refresh++ }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        refresh++
+        // После двух отказов система молча не показывает диалог — ведём в системные настройки, иначе кнопка «не работает».
+        if (!granted && !notificationsEnabled(context)) {
+            safeLaunch(launcher, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName), context)
+        }
+    }
 
     val notificationsOn = remember(refresh) { notificationsEnabled(context) }
     val exactAlarmsOn = remember(refresh) { exactAlarmsAllowed(context) }
@@ -1126,10 +1311,12 @@ fun DeliverySettingsScreen(onBack: () -> Unit) {
         StepCard(batteryOk, s.stepBatteryTitle, s.stepBatteryBody, s.configure) {
             open(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + context.packageName)))
         }
-        StepCard(dndOk, s.stepDndTitle, s.stepDndBody, s.grantAccess) {
+        // «Не беспокоить» — по желанию: не красим красным то, без чего напоминания всё равно приходят.
+        StepCard(if (dndOk) true else null, s.stepDndTitle, s.stepDndBody, s.grantAccess) {
             open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
         }
-        StepCard(false, s.stepAutostartTitle, s.vendorHint(Build.MANUFACTURER), s.openAppSettings) {
+        // Автозапуск приложение проверить не может — нейтральный значок, а не вечно красный пункт.
+        StepCard(null, s.stepAutostartTitle, s.stepAutostartBody + "\n" + s.vendorHint(Build.MANUFACTURER), s.openAppSettings) {
             open(appDetailsSettings(context))
         }
 
@@ -1148,10 +1335,15 @@ fun DeliverySettingsScreen(onBack: () -> Unit) {
                     s.notifWord.takeIf { !notificationsEnabled(context) },
                     s.alarmsWord.takeIf { !exactAlarmsAllowed(context) },
                     s.batteryWord.takeIf { !isBatteryUnrestricted(context) },
-                    // «Не беспокоить» тоже в списке: без него будильник молчит в тихом режиме.
-                    s.dndWord.takeIf { !hasDndAccess(context) },
                 )
-                say(if (left.isEmpty()) s.allAllowed else s.remaining(left.joinToString(", ")))
+                // «Не беспокоить» — необязательное: меню и чек-лист должны говорить одно и то же.
+                say(
+                    when {
+                        left.isNotEmpty() -> s.remaining(left.joinToString(", "))
+                        !hasDndAccess(context) -> s.allAllowedDndOptional
+                        else -> s.allAllowed
+                    },
+                )
             },
             modifier = Modifier.fillMaxWidth(),
         ) { Text(s.checkAgain) }
@@ -1180,15 +1372,24 @@ private fun SwitchRow(title: String, body: String, checked: Boolean, onChange: (
     }
 }
 
+/** Пункт чек-листа: `done = null` — проверить нельзя или пункт необязательный (нейтральный значок, не красный). */
 @Composable
-private fun StepCard(done: Boolean, title: String, body: String, action: String, onClick: () -> Unit) {
+private fun StepCard(done: Boolean?, title: String, body: String, action: String, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    if (done) Icons.Default.CheckCircle else Icons.Default.Warning,
+                    when (done) {
+                        true -> Icons.Default.CheckCircle
+                        false -> Icons.Default.Warning
+                        null -> Icons.Default.Info
+                    },
                     contentDescription = null,
-                    tint = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    tint = when (done) {
+                        true -> MaterialTheme.colorScheme.primary
+                        false -> MaterialTheme.colorScheme.error
+                        null -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     modifier = Modifier.size(22.dp),
                 )
                 Spacer(Modifier.width(10.dp))
@@ -1197,7 +1398,7 @@ private fun StepCard(done: Boolean, title: String, body: String, action: String,
             Spacer(Modifier.height(6.dp))
             Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(10.dp))
-            FilledTonalButton(onClick = onClick) { Text(action) }
+            FilledTonalButton(onClick = onClick) { Text(action, maxLines = 1, softWrap = false) }
         }
     }
 }

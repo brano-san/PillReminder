@@ -1,6 +1,7 @@
 package tech.unispace.pillreminder.data
 
 import android.content.Context
+import tech.unispace.pillreminder.widget.WidgetStyle
 
 /**
  * Настройки напоминаний. SharedPreferences, а не DataStore, потому что читать их
@@ -166,10 +167,13 @@ class Settings(context: Context) {
         get() = prefs.getInt(KEY_MINI_POINTS, 10)
         set(value) = prefs.edit().putInt(KEY_MINI_POINTS, value.coerceIn(3, 60)).apply()
 
-    /** На сколько минут откладывает кнопка «Отложить» в уведомлении. */
+    /**
+     * На сколько минут откладывает кнопка «Отложить» в уведомлении. Пока не задано явно —
+     * первый из вариантов [snoozeOptions], как и обещает подпись в настройках.
+     */
     var snoozeMinutes: Int
-        get() = prefs.getInt(KEY_SNOOZE, 15)
-        set(value) = prefs.edit().putInt(KEY_SNOOZE, value.coerceIn(5, 120)).apply()
+        get() = prefs.getInt(KEY_SNOOZE, -1).takeIf { it > 0 } ?: snoozeOptions.first()
+        set(value) = prefs.edit().putInt(KEY_SNOOZE, value.coerceIn(1, 720)).apply()
 
     /** Тихие часы: повторы напоминаний не беспокоят. */
     var quietEnabled: Boolean
@@ -211,7 +215,31 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_HOME_COMPACT, false)
         set(value) = prefs.edit().putBoolean(KEY_HOME_COMPACT, value).apply()
 
+    /** Схема дня (подъём → таблетки → еда → сон) в карточке пробуждения на главной. */
+    var showDayTimeline: Boolean
+        get() = prefs.getBoolean(KEY_DAY_TIMELINE, true)
+        set(value) = prefs.edit().putBoolean(KEY_DAY_TIMELINE, value).apply()
+
+    /** Цвет фона виджета (ARGB); по умолчанию бирюзовый из палитры. */
+    var widgetColor: Int
+        get() = prefs.getInt(KEY_WIDGET_COLOR, WidgetStyle.DEFAULT_COLOR)
+        set(value) = prefs.edit().putInt(KEY_WIDGET_COLOR, value).apply()
+
+    /** Непрозрачность фона виджета, 0–100 %; 0 — полностью прозрачный. */
+    var widgetOpacity: Int
+        get() = prefs.getInt(KEY_WIDGET_OPACITY, 100)
+        set(value) = prefs.edit().putInt(KEY_WIDGET_OPACITY, value.coerceIn(0, 100)).apply()
+
+    /** Цвет текста виджета: [WidgetStyle.TEXT_AUTO] (по яркости фона), [WidgetStyle.TEXT_LIGHT], [WidgetStyle.TEXT_DARK]. */
+    var widgetText: String
+        get() = prefs.getString(KEY_WIDGET_TEXT, WidgetStyle.TEXT_AUTO) ?: WidgetStyle.TEXT_AUTO
+        set(value) = prefs.edit().putString(KEY_WIDGET_TEXT, value).apply()
+
     private companion object {
+        const val KEY_DAY_TIMELINE = "show_day_timeline"
+        const val KEY_WIDGET_COLOR = "widget_color"
+        const val KEY_WIDGET_OPACITY = "widget_opacity"
+        const val KEY_WIDGET_TEXT = "widget_text"
         const val KEY_HOME_COMPACT = "home_compact"
         const val KEY_TUTORIAL_SEEN = "tutorial_seen"
         const val KEY_VISIT_OFFSETS_EVER = "visit_offsets_ever"

@@ -311,6 +311,8 @@ fun TrackersScreen(
     rows: List<TrackerRow>,
     onOpen: (Long) -> Unit,
     onCreate: (String) -> Unit,
+    /** «Создать все три»: трекеры заводятся сразу, а не стопкой мастеров друг за другом. */
+    onCreateAll: (List<String>) -> Unit,
     onAddEntry: (TrackerEntry) -> Unit,
     onOpenCorrelations: () -> Unit,
     contentPadding: PaddingValues,
@@ -340,7 +342,7 @@ fun TrackersScreen(
             if (missing.size >= 2) {
                 item(key = "create-all") {
                     OutlinedButton(
-                        onClick = { missing.forEach(onCreate) },
+                        onClick = { onCreateAll(missing) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
@@ -412,7 +414,10 @@ private fun TrackerCard(row: TrackerRow, miniPoints: Int, onOpen: (Long) -> Unit
                 FilledTonalIconButton(onClick = onAdd) { Icon(Icons.Default.Add, contentDescription = s.addValue) }
             }
             Spacer(Modifier.height(10.dp))
-            val miniValues = row.entries.take(miniPoints).reversed().map { it.value }
+            // Неоценённые автозаписи сна (0) на график не идут — иначе каждая ночь без оценки рисуется провалом.
+            val miniValues = row.entries
+                .filter { row.tracker.type == TrackerType.WEIGHT || it.value > 0 }
+                .take(miniPoints).reversed().map { it.value }
             LineChart(
                 values = miniValues,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -444,6 +449,9 @@ fun EditTrackerScreen(
     var remind by remember { mutableStateOf(true) }
     var showTimePicker by remember { mutableStateOf(false) }
     var startDay by remember { mutableStateOf(today()) }
+    // Id после первого сохранения (перенос ночей создаёт трекер до кнопки «Сохранить»):
+    // иначе «Сохранить» завёл бы второй трекер того же типа с двойными напоминаниями.
+    var savedId by remember { mutableStateOf(trackerId) }
 
     LaunchedEffect(trackerId) {
         if (!isNew) {
@@ -460,9 +468,10 @@ fun EditTrackerScreen(
     }
 
     // При создании трекера сна предлагаем перенести уже накопленные ночи из истории.
+    // Только при создании: у существующего трекера диалог всплывал бы при каждом открытии настроек.
     var importCandidates by remember { mutableStateOf<List<Pair<Long, Long>>>(emptyList()) }
     LaunchedEffect(type, trackerId) {
-        if (type == TrackerType.SLEEP) importCandidates = vm.sleepHistoryCandidates()
+        if (isNew && type == TrackerType.SLEEP) importCandidates = vm.sleepHistoryCandidates()
     }
     if (importCandidates.isNotEmpty()) {
         AlertDialog(
@@ -476,15 +485,18 @@ fun EditTrackerScreen(
                     // Трекер мог ещё не существовать — сохраняем и импортируем в него.
                     vm.saveTracker(
                         Tracker(
-                            id = trackerId,
+                            id = savedId,
                             type = type,
-                            askTimes = askTimes.ifEmpty { listOf(600) }.joinToString(","),
+                            askTimes = askTimes.joinToString(","),
                             startEpochDay = startDay,
-                            remindEnabled = remind,
+                            remindEnabled = remind && askTimes.isNotEmpty(),
                             heightCm = heightText.toIntOrNull()?.coerceIn(50, 250) ?: 0,
                             sex = sex,
                         ),
-                    ) { id -> vm.importSleepHistory(id, nights) }
+                    ) { id ->
+                        savedId = id
+                        vm.importSleepHistory(id, nights)
+                    }
                 }) { Text(s.importBtn) }
             },
             dismissButton = { TextButton(onClick = { importCandidates = emptyList() }) { Text(s.later) } },
@@ -496,7 +508,7 @@ fun EditTrackerScreen(
     if (confirmDeleteTracker) {
         ConfirmDeleteDialog(
             title = trackerDisplayName(type),
-            onConfirm = { vm.deleteTracker(trackerId) { onDone() } },
+            onConfirm = { vm.deleteTracker(savedId) { onDone() } },
             onDismiss = { confirmDeleteTracker = false },
         )
     }
@@ -543,13 +555,14 @@ fun EditTrackerScreen(
             Row(Modifier.fillMaxWidth().imePadding().padding(16.dp)) {
                 Button(
                     onClick = {
+                        // Пустой список времён = напоминаний нет, как и обещает подпись; 10:00 не подставляем молча.
                         vm.saveTracker(
                             Tracker(
-                                id = trackerId,
+                                id = savedId,
                                 type = type,
-                                askTimes = askTimes.ifEmpty { listOf(600) }.joinToString(","),
+                                askTimes = askTimes.joinToString(","),
                                 startEpochDay = startDay,
-                                remindEnabled = remind,
+                                remindEnabled = remind && askTimes.isNotEmpty(),
                                 heightCm = heightText.toIntOrNull()?.coerceIn(50, 250) ?: 0,
                                 sex = sex,
                             ),
@@ -578,12 +591,8 @@ fun EditTrackerScreen(
                         colors = fieldColors(),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    HorizontalDivider()
-                    Text(s.sexSubsection, style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = sex == "m", onClick = { sex = "m" }, label = { Text(s.sexM) })
-                        FilterChip(selected = sex == "f", onClick = { sex = "f" }, label = { Text(s.sexF) })
-                    }
+                    // «Пол» не спрашиваем: ИМТ и отчёт его не используют, а личный вопрос без эффекта смущает.
+                    // Поле в базе оставлено для совместимости бэкапов.
                 }
             }
 
@@ -762,7 +771,8 @@ fun TrackerDetailScreen(
         )
     }
 
-    val shown = row.entries.take(window).reversed()
+    // Неоценённые автозаписи сна (0) остаются в списке с кнопкой «Оценить», но не рисуются как худшая ночь.
+    val shown = row.entries.filter { row.tracker.type == TrackerType.WEIGHT || it.value > 0 }.take(window).reversed()
     val values = shown.map { it.value }
 
     if (showBmiTable) BmiTableDialog(onDismiss = { showBmiTable = false })
@@ -1193,7 +1203,7 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
                 when (tracker.type) {
                     TrackerType.WEIGHT -> OutlinedTextField(
                         value = weightText,
-                        onValueChange = { weightText = it },
+                        onValueChange = { weightText = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
                         label = { Text(s.weightLabel) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,

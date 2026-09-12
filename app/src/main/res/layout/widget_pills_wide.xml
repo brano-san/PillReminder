@@ -1,75 +1,99 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Широкий вариант: две строки приёмов, строка про еду и кнопка «Выпил».
-     Только теги, которые понимает RemoteViews: LinearLayout, TextView, Button.
-     Space/View использовать нельзя — виджет не добавится вовсе. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Широкий вариант: два приёма, под каждым подстрока (еда, комментарий) и кнопка «Выпил».
+     Только теги, которые понимает RemoteViews: FrameLayout, LinearLayout, TextView, ImageView, Button.
+     Space/View использовать нельзя — виджет не добавится вовсе.
+     Фон — отдельный ImageView (цвет и прозрачность из кода), см. widget_pills.xml. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@drawable/widget_bg"
-    android:orientation="vertical"
-    android:padding="12dp">
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/widget_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_bg" />
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="12dp">
 
-        <TextView
-            android:id="@+id/widget_title"
-            android:text="@string/widget_preview_title"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#B3FFFFFF"
-            android:textSize="12sp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/widget_line1"
-            android:text="@string/widget_preview_line1"
+            <TextView
+                android:id="@+id/widget_title"
+                android:text="@string/widget_preview_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#B3FFFFFF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/widget_line1"
+                android:text="@string/widget_preview_line1"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_sub1"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#CCFFFFFF"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/widget_line2"
+                android:text="@string/widget_preview_line2"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#E6FFFFFF"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/widget_sub2"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#CCFFFFFF"
+                android:textSize="12sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Свой фон вместо системного: цвет плашки и текста подбирает код под стиль виджета. -->
+        <Button
+            android:id="@+id/widget_take"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:ellipsize="end"
-            android:maxLines="1"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/widget_take_light"
+            android:minHeight="40dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:text="@string/widget_take"
+            android:textAllCaps="false"
             android:textColor="#FFFFFF"
-            android:textSize="14sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/widget_line2"
-            android:text="@string/widget_preview_line2"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="#E6FFFFFF"
             android:textSize="13sp" />
 
-        <TextView
-            android:id="@+id/widget_meal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="#CCFFFFFF"
-            android:textSize="12sp"
-            android:visibility="gone" />
     </LinearLayout>
-
-    <Button
-        android:id="@+id/widget_take"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:minHeight="40dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
-        android:text="@string/widget_take"
-        android:textAllCaps="false"
-        android:textColor="#FFFFFF"
-        android:textSize="13sp" />
-
-</LinearLayout>
+</FrameLayout>

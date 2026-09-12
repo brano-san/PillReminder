@@ -8,9 +8,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import tech.unispace.pillreminder.container
+import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.MINUTE_MS
+import tech.unispace.pillreminder.data.Planner
 import tech.unispace.pillreminder.data.Settings
+import tech.unispace.pillreminder.data.mealSatisfied
 import tech.unispace.pillreminder.ui.Lang
 
 /**
@@ -27,6 +30,7 @@ class ReminderReceiver : BroadcastReceiver() {
 
         if (intent.getBooleanExtra(EXTRA_TEST, false)) {
             val testFullScreen = intent.getBooleanExtra(EXTRA_TEST_FULL_SCREEN, false)
+            // Проверочное уведомление — без кнопок действий: за ним нет приёма, нажимать было бы нечего.
             Notifications.show(
                 app,
                 AlarmScheduler.TEST_ID,
@@ -34,6 +38,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 Lang.s.testBody,
                 useAlarmChannel = settings.alarmSound,
                 fullScreen = testFullScreen,
+                withActions = false,
             )
             return
         }
@@ -44,6 +49,7 @@ class ReminderReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = app.container.db
+                val planner = app.container.planner
                 val dose = db.doseDao().getById(doseId) ?: return@launch
                 // Успели отметить между будильниками — молчим и цепочку не продолжаем.
                 if (dose.status != DoseStatus.PENDING) {
@@ -54,14 +60,11 @@ class ReminderReceiver : BroadcastReceiver() {
                 // Тихие часы: повтор (не первое напоминание) откладывается до их конца.
                 val now = System.currentTimeMillis()
                 if (attempt > 0 && isQuiet(settings, now)) {
-                    AlarmScheduler(app).schedule(
-                        dose = dose,
-                        triggerAt = quietEndMillis(settings, now),
-                        attempt = attempt,
-                    )
+                    planner.rememberRepeat(doseId, quietEndMillis(settings, now), attempt)
                     return@launch
                 }
-                val med = db.medicationDao().getById(dose.medId) ?: return@launch
+                val medsById = db.medicationDao().getAllIncludingInactive().associateBy { it.id }
+                val med = medsById[dose.medId] ?: return@launch
 
                 // Режим конфиденциальности: ни названия, ни комментария в шторке.
                 val private = settings.privateNotifications
@@ -72,23 +75,29 @@ class ReminderReceiver : BroadcastReceiver() {
                         append(formatAmount(dose.amount, med.form))
                         // Связь с едой обязана быть видна в шторке; личный комментарий — нет,
                         // он остаётся на карточке таблетки.
-                        if (med.afterMealMinutes > 0) {
+                        Lang.s.mealRelation(med.afterMealMinutes, med.beforeMealMinutes, med.mealCalories)?.let {
                             append(" · ")
-                            append(Lang.s.mealAfterShort(Lang.s.duration(med.afterMealMinutes)))
-                        }
-                        if (med.beforeMealMinutes > 0) {
-                            append(" · ")
-                            append(Lang.s.mealBeforeShort(Lang.s.duration(med.beforeMealMinutes)))
+                            append(it)
                         }
                     }
                 }
                 // Несколько таблеток в одну минуту — одно уведомление на всех, а не стопка.
-                val batch = db.doseDao().getDay(dose.dayEpochDay)
-                    .filter { it.status == DoseStatus.PENDING && abs(it.plannedAt - dose.plannedAt) <= GROUP_WINDOW_MS }
-                    .sortedBy { it.id }
-                val leader = batch.firstOrNull() ?: dose
+                // В группу берём только тех, кому действительно пора: приём, ждущий кнопку «Еда»,
+                // за компанию звонить не должен (тот же судья, что и у будильника — mealSatisfied).
+                val dayDoses = db.doseDao().getDay(dose.dayEpochDay)
+                val meals = db.mealDao().getAll().map { it.atMillis }
+                val wakeAt = db.wakeDao().getDay(dose.dayEpochDay)?.wakeAt
+                val batch = (
+                    dayDoses.filter { d ->
+                        d.status == DoseStatus.PENDING && abs(d.plannedAt - dose.plannedAt) <= GROUP_WINDOW_MS &&
+                            medsById[d.medId]?.let { m -> m.active && mealSatisfied(m, d, dayDoses, meals, wakeAt) } == true
+                    } + dose
+                    ).distinctBy { it.id }.sortedBy { it.id }
+                val leader = batch.first()
                 if (batch.size > 1 && leader.id != doseId) {
-                    // Уведомление и цепочку повторов ведёт «старший» приём группы.
+                    // Уведомление ведёт «старший» приём группы, но свой повтор ведомый ставит сам:
+                    // когда старшего отметят, следующим звонком старшим станет он.
+                    scheduleNext(planner, settings, dose, attempt)
                     return@launch
                 }
 
@@ -97,7 +106,8 @@ class ReminderReceiver : BroadcastReceiver() {
                         ""
                     } else {
                         batch.joinToString("\n") { d ->
-                            d.medNameSnapshot + " · " + formatAmount(d.amount, med.form)
+                            // Слово «таблетки/капли» — по форме каждой таблетки, а не по форме старшей.
+                            d.medNameSnapshot + " · " + formatAmount(d.amount, medsById[d.medId]?.form ?: med.form)
                         }
                     }
                     Notifications.showGroup(
@@ -125,21 +135,26 @@ class ReminderReceiver : BroadcastReceiver() {
                     )
                 }
 
-                if (settings.repeatEnabled && attempt + 1 < settings.repeatCount) {
-                    var nextAt = System.currentTimeMillis() +
-                        settings.repeatIntervalMinutes * MINUTE_MS
-                    if (isQuiet(settings, nextAt)) {
-                        nextAt = quietEndMillis(settings, nextAt)
-                    }
-                    AlarmScheduler(app).schedule(
-                        dose = dose,
-                        triggerAt = nextAt,
-                        attempt = attempt + 1,
-                    )
-                }
+                scheduleNext(planner, settings, dose, attempt)
             } finally {
                 pending.finish()
             }
+        }
+    }
+
+    /**
+     * Следующий повтор — или конец цепочки. И то и другое записывается в приём (`remindAt`, `attempt`),
+     * чтобы пересборка будильников продолжила цепочку с того же места, а не начала заново.
+     */
+    private suspend fun scheduleNext(planner: Planner, settings: Settings, dose: Dose, attempt: Int) {
+        if (settings.repeatEnabled && attempt + 1 < settings.repeatCount) {
+            var nextAt = System.currentTimeMillis() + settings.repeatIntervalMinutes * MINUTE_MS
+            if (isQuiet(settings, nextAt)) {
+                nextAt = quietEndMillis(settings, nextAt)
+            }
+            planner.rememberRepeat(dose.id, nextAt, attempt + 1)
+        } else {
+            planner.rememberRepeat(dose.id, null, attempt + 1)
         }
     }
 

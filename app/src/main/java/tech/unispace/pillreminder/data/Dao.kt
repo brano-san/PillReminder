@@ -77,11 +77,12 @@ interface DoseDao {
     )
     suspend fun pendingForMedOnDay(medId: Long, day: Long): List<Dose>
 
-    @Query("DELETE FROM doses WHERE dayEpochDay = :day AND status = 'PENDING'")
-    suspend fun deletePendingOnDay(day: Long)
+    /** Ожидающие приёмы дня — перед удалением их будильники и уведомления надо снять (Planner.dropPending). */
+    @Query("SELECT * FROM doses WHERE dayEpochDay = :day AND status = 'PENDING'")
+    suspend fun pendingOnDay(day: Long): List<Dose>
 
-    @Query("DELETE FROM doses WHERE medId = :medId AND dayEpochDay = :day AND status = 'PENDING'")
-    suspend fun deletePendingForMedOnDay(medId: Long, day: Long)
+    @Query("SELECT * FROM doses WHERE medId = :medId AND dayEpochDay IN (:days) AND status = 'PENDING'")
+    suspend fun pendingForMedOnDays(medId: Long, days: List<Long>): List<Dose>
 
     @Query("SELECT * FROM doses WHERE dayEpochDay BETWEEN :from AND :to")
     fun observeBetween(from: Long, to: Long): Flow<List<Dose>>
@@ -134,6 +135,14 @@ interface MealDao {
 
     @Query("SELECT * FROM meals ORDER BY atMillis DESC LIMIT 1")
     fun observeLast(): Flow<MealEvent?>
+
+    /** Все приёмы пищи по времени — для правила «ждёт «Еда»» и схемы дня на главной. */
+    @Query("SELECT atMillis FROM meals ORDER BY atMillis")
+    fun observeAllTimes(): Flow<List<Long>>
+
+    /** Ошибочное нажатие «Еда» убирается из журнала долгим нажатием. */
+    @Query("DELETE FROM meals WHERE atMillis = :at")
+    suspend fun deleteAt(at: Long)
 
     @Insert
     suspend fun insert(meal: MealEvent): Long

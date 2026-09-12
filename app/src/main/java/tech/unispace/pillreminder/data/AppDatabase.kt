@@ -30,7 +30,7 @@ class Converters {
         TrackerEntry::class,
         MealEvent::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -78,7 +78,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2)
+        /**
+         * 2 → 3: релиз 1.2 — минимум калорий в еде для правила «после еды», а у приёма — момент
+         * отложенного напоминания и счётчик повторов (чтобы пересборка будильников их не затирала).
+         * МИГРАЦИЯ ЗАФИКСИРОВАНА: 1.2 выпущена, дальнейшие изменения схемы — только Migration(3, 4) и version = 4.
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE medications ADD COLUMN mealCalories INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE doses ADD COLUMN remindAt INTEGER")
+                db.execSQL("ALTER TABLE doses ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

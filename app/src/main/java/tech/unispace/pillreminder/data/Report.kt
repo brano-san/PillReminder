@@ -35,7 +35,11 @@ object Report {
         val fromMillis = LocalDate.ofEpochDay(fromDay).atStartOfDay(zone).toInstant().toEpochMilli()
         val dateFmt = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.ROOT)
 
-        val doses = db.doseDao().getAll().filter { it.dayEpochDay in fromDay..toDay }
+        // Сегодняшние ещё не наступившие приёмы — не пропуски: считаем так же, как экран истории.
+        val now = System.currentTimeMillis()
+        val doses = db.doseDao().getAll().filter {
+            it.dayEpochDay in fromDay..toDay && (it.status != DoseStatus.PENDING || it.plannedAt < now)
+        }
         val meds = db.medicationDao().getAllIncludingInactive().associateBy { it.id }
         val planned = doses.size
         val taken = doses.count { it.status == DoseStatus.TAKEN }
@@ -68,9 +72,11 @@ object Report {
                     val name = med?.name ?: list.first().medNameSnapshot.ifBlank { "?" }
                     appendLine("• $name")
                     if (med != null) {
-                        val dose = listOf(med.form, med.doseInfo).filter { it.isNotBlank() }.joinToString(" ")
+                        val dose = listOf(s.formName(med.form), med.doseInfo).filter { it.isNotBlank() }.joinToString(" ")
                         val schedule = when {
                             med.asNeeded -> s.asNeededShort
+                            med.byClock -> s.byClockShort + " " + med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) }
+                            med.linkedToMedId != null -> s.afterMed(meds[med.linkedToMedId]?.name ?: "?", s.duration(med.linkedDelayMinutes))
                             else -> s.schedule(med.timesPerDay, med.intervalMinutes, med.everyNDays)
                         }
                         appendLine("  $dose · ${s.perIntake(s.pills(med.dosesPerIntake, med.form))}")
@@ -94,14 +100,19 @@ object Report {
                         else -> s.trackerSleep
                     }
                     header(this, title)
+                    // Неоценённые автозаписи сна (значение 0) в статистику оценок не идут — только в часы сна.
+                    val values = mine.map { it.value }.filter { tracker.type == TrackerType.WEIGHT || it > 0 }
                     if (mine.isEmpty()) {
                         appendLine(s.repNoData)
                     } else {
-                        val values = mine.map { it.value }
-                        appendLine(
-                            "  ${s.minLabel} ${fmt(values.min())} · ${s.maxLabel} ${fmt(values.max())} · " +
-                                "${s.avgLabel} ${fmt(values.average())} · n=${values.size}",
-                        )
+                        if (values.isEmpty()) {
+                            appendLine(s.repNoData)
+                        } else {
+                            appendLine(
+                                "  ${s.minLabel} ${fmt(values.min())} · ${s.maxLabel} ${fmt(values.max())} · " +
+                                    "${s.avgLabel} ${fmt(values.average())} · n=${values.size}",
+                            )
+                        }
                         if (tracker.type == TrackerType.SLEEP) {
                             val durations = mine.mapNotNull { e ->
                                 if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
@@ -163,12 +174,17 @@ object Report {
                     sleepHours -> list.mapNotNull { e ->
                         if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
                     }.takeIf { it.isNotEmpty() }?.average()
-                    else -> list.map { it.value }.average()
+                    // Оценки 1–5: неоценённые автозаписи (0) в корреляцию не попадают.
+                    else -> list.map { it.value }.filter { type == TrackerType.WEIGHT || it > 0 }
+                        .takeIf { it.isNotEmpty() }?.average()
                 }
             }
         }
 
-        val doses = db.doseDao().getAll().filter { it.dayEpochDay in fromDay..toDay }.groupBy { it.dayEpochDay }
+        val now = System.currentTimeMillis()
+        val doses = db.doseDao().getAll()
+            .filter { it.dayEpochDay in fromDay..toDay && (it.status != DoseStatus.PENDING || it.plannedAt < now) }
+            .groupBy { it.dayEpochDay }
         val adherence = days.map { day ->
             val list = doses[day].orEmpty()
             if (list.isEmpty()) null else list.count { it.status == DoseStatus.TAKEN } * 100.0 / list.size

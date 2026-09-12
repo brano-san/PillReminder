@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -61,6 +62,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         Icons.Default.Schedule,
         Icons.Default.AutoAwesome,
         Icons.Default.Bedtime,
+        Icons.Default.Timeline,
     )
     val pager = rememberPagerState(pageCount = { slides.size })
     val scope = rememberCoroutineScope()

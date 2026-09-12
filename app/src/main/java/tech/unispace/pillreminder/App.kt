@@ -26,7 +26,7 @@ class App : Application() {
         Lang.code = Settings(this).language
         container = AppContainer(this)
         Notifications.createChannels(this)
-        // Ð Ð°ÑÐ¿Ð¸ÑÐ°Ð½Ð¸Ðµ Â«Ð¿Ð¾ ÑÐ°ÑÐ°Ð¼Â» Ð¸ Ð±ÑÐ´Ð¸Ð»ÑÐ½Ð¸ÐºÐ¸ Ð½Ðµ Ð´Ð¾Ð»Ð¶Ð½Ñ Ð¶Ð´Ð°ÑÑ, Ð¿Ð¾ÐºÐ° Ð¿Ð¾Ð»ÑÐ·Ð¾Ð²Ð°ÑÐµÐ»Ñ ÑÑÐ¾-ÑÐ¾ Ð½Ð°Ð¶Ð¼ÑÑ.
+        // Расписание «по часам» и будильники не должны ждать, пока пользователь что-то нажмёт; параллельный вызов из BootReceiver безопасен — Planner сериализует мутации мьютексом.
         CoroutineScope(Dispatchers.IO).launch { container.planner.rescheduleAlarms() }
     }
 }

@@ -138,7 +138,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                     context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
                     say(s.exportDone)
                 } catch (_: Exception) {
-                    say(s.importError)
+                    say(s.exportError)
                 }
             }
         }
@@ -151,8 +151,19 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                 } catch (_: Exception) {
                     null
                 }
-                if (text == null) say(s.importError)
-                else vm.importBackup(text) { ok -> say(if (ok) s.importDone else s.importError) }
+                if (text == null) {
+                    say(s.importError)
+                } else {
+                    vm.importBackup(text) { outcome ->
+                        say(
+                            when (outcome) {
+                                ImportOutcome.OK -> s.importDone
+                                ImportOutcome.TOO_NEW -> s.importTooNew
+                                ImportOutcome.FAILED -> s.importError
+                            },
+                        )
+                    }
+                }
             }
         }
     }
@@ -260,7 +271,7 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
                     context.contentResolver.openOutputStream(uri)?.use { it.write(report.toByteArray(Charsets.UTF_8)) }
                     snackbars.showSnackbar(s.exportDone)
                 } catch (_: Exception) {
-                    snackbars.showSnackbar(s.importError)
+                    snackbars.showSnackbar(s.exportError)
                 }
             }
         }
@@ -273,7 +284,7 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
                     context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                     snackbars.showSnackbar(s.exportDone)
                 } catch (_: Exception) {
-                    snackbars.showSnackbar(s.importError)
+                    snackbars.showSnackbar(s.exportError)
                 }
             }
         }
@@ -469,10 +480,12 @@ fun CorrelationScreen(vm: MainViewModel, onBack: () -> Unit) {
                         // Полные названия пар — то, что убрали с экрана ради компактности.
                         for (i in picked.indices) {
                             for (j in i + 1 until picked.size) {
-                                val r = pearson(data[picked[i]] ?: emptyList(), data[picked[j]] ?: emptyList())
+                                val a = data[picked[i]] ?: emptyList()
+                                val b = data[picked[j]] ?: emptyList()
+                                val r = pearson(a, b)
                                 Text(
                                     "${i + 1}×${j + 1}  " + seriesLabel(picked[i], s) + " × " + seriesLabel(picked[j], s) + ": " +
-                                        (r?.let { String.format(Locale.ROOT, "r = %.2f", it) } ?: s.corrNotEnough),
+                                        (r?.let { String.format(Locale.ROOT, "r = %.2f", it) } ?: corrMissingReason(a, b, s)),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -538,9 +551,17 @@ fun CorrelationScreen(vm: MainViewModel, onBack: () -> Unit) {
                             )
                         }
                     }
-                    if (pairs.any { it.third == null }) {
+                    // Причина прочерка честная: «мало дней» и «показатель не менялся» — разные советы пользователю.
+                    val reasons = buildList {
+                        for (i in picked.indices) for (j in i + 1 until picked.size) {
+                            val a = data[picked[i]] ?: emptyList()
+                            val b = data[picked[j]] ?: emptyList()
+                            if (pearson(a, b) == null) add(corrMissingReason(a, b, s))
+                        }
+                    }.distinct()
+                    reasons.forEach { reason ->
                         Spacer(Modifier.height(6.dp))
-                        Text("— " + s.corrNotEnough, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("— " + reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -589,6 +610,14 @@ private fun pearson(a: List<Double?>, b: List<Double?>): Double? {
     }
     if (vx == 0.0 || vy == 0.0) return null
     return cov / sqrt(vx * vy)
+}
+
+/** Почему корреляции нет: меньше трёх общих дней или один из показателей не менялся. */
+private fun corrMissingReason(a: List<Double?>, b: List<Double?>, s: S): String {
+    val pairs = a.zip(b).mapNotNull { (x, y) -> if (x != null && y != null) x to y else null }
+    if (pairs.size < 3) return s.corrNotEnough
+    val constant = pairs.map { it.first }.distinct().size == 1 || pairs.map { it.second }.distinct().size == 1
+    return if (constant) s.corrConstant else s.corrNotEnough
 }
 
 /** Значение серии на каждый из последних [days] дней (null — данных нет). */

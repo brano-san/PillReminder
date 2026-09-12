@@ -2,6 +2,7 @@
 
 package tech.unispace.pillreminder.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -332,6 +333,17 @@ private fun NotesList(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item(key = "search") { SearchField(query) { query = it } }
+        // Пустой результат поиска — не пустой экран: иначе он читается как «ещё грузится».
+        if (notes.isEmpty()) {
+            item(key = "nothing") {
+                Text(
+                    Lang.s.searchNothingFound,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+        }
         val grouped = notes.groupBy { ageGroup(it.atMillis, Lang.s) }
         grouped.forEach { (group, list) ->
             item(key = "g-" + group) {
@@ -412,6 +424,11 @@ fun VisitsList(
         return
     }
     val now = System.currentTimeMillis()
+    // Визит выбранного дня удалили или перенесли — фильтр снимаем сам, иначе список пуст без причины.
+    LaunchedEffect(visits) {
+        val picked = pickedDay
+        if (picked != null && visits.none { epochDayOf(it.atMillis) == picked }) pickedDay = null
+    }
     val shown = pickedDay?.let { day -> visits.filter { epochDayOf(it.atMillis) == day } } ?: visits
     val upcoming = shown.filter { it.atMillis >= now }.sortedBy { it.atMillis }
     val past = shown.filter { it.atMillis < now }.sortedByDescending { it.atMillis }
@@ -511,7 +528,8 @@ private fun VisitsCalendar(
                                     if (picked == day) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                                     RoundedCornerShape(6.dp),
                                 )
-                                .clickable(enabled = hasVisit) { onPick(day) }
+                                // Выбранный день кликабелен всегда — иначе после удаления визита фильтр не снять.
+                                .clickable(enabled = hasVisit || picked == day) { onPick(day) }
                                 .padding(vertical = 4.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
@@ -631,6 +649,16 @@ fun LibraryList(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item(key = "search") { SearchField(query) { query = it } }
+        if (entries.isEmpty()) {
+            item(key = "nothing") {
+                Text(
+                    s.searchNothingFound,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+        }
         items(entries, key = { it.id }) { entry ->
             Card(
                 Modifier
@@ -684,7 +712,20 @@ fun NoteViewScreen(
 ) {
     val s = Lang.s
     var note by remember { mutableStateOf<Note?>(null) }
-    LaunchedEffect(noteId) { note = vm.loadNote(noteId) }
+    // Привязка к таблетке — иначе поле «О какой таблетке» было бы только на запись, без чтения.
+    var medName by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(noteId) {
+        note = vm.loadNote(noteId)
+        medName = note?.medId?.let { vm.medName(it) }
+    }
+    var confirmDelete by remember { mutableStateOf(false) }
+    if (confirmDelete) {
+        ConfirmDeleteDialog(
+            title = note?.title.orEmpty(),
+            onConfirm = { vm.deleteNote(noteId) { onDone() } },
+            onDismiss = { confirmDelete = false },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -696,8 +737,8 @@ fun NoteViewScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = onEdit) { Text(s.edit) }
-                    TextButton(onClick = { vm.deleteNote(noteId) { onDone() } }) { Text(s.delete) }
+                    TextButton(onClick = onEdit) { Text(s.edit, maxLines = 1, softWrap = false) }
+                    TextButton(onClick = { confirmDelete = true }) { Text(s.delete, maxLines = 1, softWrap = false) }
                 },
             )
         },
@@ -721,6 +762,13 @@ fun NoteViewScreen(
                     n.description,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (medName != null || n.tags.isNotBlank()) {
+                Text(
+                    listOfNotNull(medName?.let { s.noteAboutMed(it) }, n.tags.takeIf { it.isNotBlank() }).joinToString(" · "),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             Spacer(Modifier.height(4.dp))
@@ -778,7 +826,7 @@ fun EditNoteScreen(
         vm.saveNote(
             Note(
                 id = noteId,
-                title = title.trim().ifBlank { if (Lang.code == "en") "Untitled" else "Без названия" },
+                title = title.trim().ifBlank { s.untitledNote },
                 description = description.trim(),
                 body = body.trim(),
                 tags = tags.split(',').map { it.trim() }.filter { it.isNotBlank() }.joinToString(", "),
@@ -832,10 +880,14 @@ fun EditNoteScreen(
                 LinearProgressIndicator(
                     progress = { (page + 1f) / NOTE_PAGES },
                     modifier = Modifier.fillMaxWidth(),
+                    gapSize = 0.dp,
+                    drawStopIndicator = {},
                 )
             }
         },
         bottomBar = {
+            // Системная «назад» ведёт на шаг назад, как стрелка в шапке, а не выбрасывает из мастера с набранным текстом.
+            BackHandler(enabled = page > 0) { page-- }
             // imePadding поднимает кнопки над клавиатурой.
             Row(
                 Modifier
@@ -846,14 +898,14 @@ fun EditNoteScreen(
             ) {
                 if (page > 0) {
                     OutlinedButton(onClick = { page-- }, modifier = Modifier.height(48.dp)) {
-                        Text(s.back)
+                        Text(s.back, maxLines = 1, softWrap = false)
                     }
                 }
                 Button(
                     onClick = { if (page == NOTE_PAGES - 1) save() else page++ },
                     modifier = Modifier.weight(1f).height(48.dp),
                 ) {
-                    Text(if (page == NOTE_PAGES - 1) s.save else s.next)
+                    Text(if (page == NOTE_PAGES - 1) s.save else s.next, maxLines = 1, softWrap = false)
                 }
             }
         },
@@ -1038,8 +1090,13 @@ fun EditVisitScreen(
                 },
                 actions = {
                     if (!isNew) {
-                        TextButton(onClick = { vm.deleteVisit(visitId) { onDone() } }) {
-                            Text(s.delete)
+                        // Удаление — только через подтверждение, как и везде в приложении.
+                        var confirm by remember { mutableStateOf(false) }
+                        if (confirm) {
+                            ConfirmDeleteDialog(title = title, onConfirm = { vm.deleteVisit(visitId) { onDone() } }, onDismiss = { confirm = false })
+                        }
+                        TextButton(onClick = { confirm = true }) {
+                            Text(s.delete, maxLines = 1, softWrap = false)
                         }
                     }
                 },
@@ -1155,14 +1212,18 @@ fun EditLibraryScreen(
     if (showStartPicker) {
         DateWheelDialog(
             initial = startDay?.let { LocalDate.ofEpochDay(it) } ?: LocalDate.now(),
-            onPick = { startDay = it.toEpochDay() },
+            // Конец не может быть раньше начала — подтягиваем, а не показываем «20.05 — 12.03».
+            onPick = { picked ->
+                startDay = picked.toEpochDay()
+                endDay = endDay?.let { maxOf(it, picked.toEpochDay()) }
+            },
             onDismiss = { showStartPicker = false },
         )
     }
     if (showEndPicker) {
         DateWheelDialog(
             initial = endDay?.let { LocalDate.ofEpochDay(it) } ?: LocalDate.now(),
-            onPick = { endDay = it.toEpochDay() },
+            onPick = { picked -> endDay = maxOf(picked.toEpochDay(), startDay ?: picked.toEpochDay()) },
             onDismiss = { showEndPicker = false },
         )
     }
@@ -1195,8 +1256,12 @@ fun EditLibraryScreen(
                 },
                 actions = {
                     if (!isNew) {
-                        TextButton(onClick = { vm.deleteLibraryEntry(entryId) { onDone() } }) {
-                            Text(s.delete)
+                        var confirm by remember { mutableStateOf(false) }
+                        if (confirm) {
+                            ConfirmDeleteDialog(title = name, onConfirm = { vm.deleteLibraryEntry(entryId) { onDone() } }, onDismiss = { confirm = false })
+                        }
+                        TextButton(onClick = { confirm = true }) {
+                            Text(s.delete, maxLines = 1, softWrap = false)
                         }
                     }
                 },
@@ -1254,18 +1319,34 @@ fun EditLibraryScreen(
             )
             // Период приёма — две даты через календарь; конец необязателен.
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Короткие подписи: «Начало приёма» в половину ширины экрана переносилось на две строки.
                 OutlinedButton(onClick = { showStartPicker = true }, modifier = Modifier.weight(1f).height(52.dp)) {
                     Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(startDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) } ?: s.libStartLabel)
+                    Text(
+                        startDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) } ?: s.libStartShort,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 OutlinedButton(onClick = { showEndPicker = true }, modifier = Modifier.weight(1f).height(52.dp)) {
                     Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(endDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) } ?: s.libEndLabel)
+                    Text(
+                        endDay?.let { LocalDate.ofEpochDay(it).format(noteDateFmt) } ?: s.libEndShort,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
-            Text(s.libEndLabel + ": " + s.libEndHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val endBeforeStart = startDay != null && endDay != null && endDay!! < startDay!!
+            Text(
+                if (endBeforeStart) s.libEndBeforeStart else s.libStartLabel + " · " + s.libEndLabel + ": " + s.libEndHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (endBeforeStart) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             // Форму и дозировку подставит мастер таблетки при выборе из каталога.
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -1319,14 +1400,14 @@ fun EditLibraryScreen(
                     onClick = { photoLauncher.launch(arrayOf("image/*")) },
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text(s.photoPick)
+                    Text(s.photoPick, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
                 if (photoUri != null) {
                     OutlinedButton(
                         onClick = { photoUri = null },
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text(s.photoRemove)
+                        Text(s.photoRemove, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -1398,7 +1479,13 @@ fun TimeWheelDialog(
     )
 }
 
-/** Превью изображения по SAF-URI; тихо ничего не рисует, если файл недоступен. */
+/** Длинная сторона превью в пикселях: фото с камеры на 12 Мп в списке каталога не нужно. */
+private const val IMAGE_MAX_SIDE_PX = 1280
+
+/**
+ * Превью изображения по SAF-URI; тихо ничего не рисует, если файл недоступен.
+ * Картинка уменьшается при декодировании: несколько полноразмерных фото в списке — это OutOfMemory.
+ */
 @Composable
 fun UriImage(uri: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -1408,8 +1495,15 @@ fun UriImage(uri: String, modifier: Modifier = Modifier) {
     LaunchedEffect(uri) {
         bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
-                context.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use {
-                    android.graphics.BitmapFactory.decodeStream(it)
+                val parsed = android.net.Uri.parse(uri)
+                // Первый проход — только размеры, второй — с подобранным шагом уменьшения.
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(parsed)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > IMAGE_MAX_SIDE_PX) sample *= 2
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                context.contentResolver.openInputStream(parsed)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it, null, opts)
                 }?.asImageBitmap()
             }.getOrNull()
         }

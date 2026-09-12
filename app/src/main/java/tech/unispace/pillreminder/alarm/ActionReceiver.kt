@@ -14,16 +14,17 @@ class ActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
-        if (action !in setOf(ACTION_TAKEN, ACTION_SKIPPED, ACTION_SNOOZE, ACTION_TAKE_GROUP)) return
+        if (action !in setOf(ACTION_TAKEN, ACTION_SKIPPED, ACTION_SNOOZE, ACTION_TAKE_GROUP, ACTION_SKIP_GROUP)) return
 
-        // «Выпил все» приходит со списком приёмов одной группы.
-        if (action == ACTION_TAKE_GROUP) {
+        // «Принять все» / «Пропустить все» приходят со списком приёмов одной группы.
+        if (action == ACTION_TAKE_GROUP || action == ACTION_SKIP_GROUP) {
             val ids = intent.getLongArrayExtra(EXTRA_DOSE_IDS) ?: return
             val pendingGroup = goAsync()
             val appCtx = context.applicationContext
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    ids.forEach { appCtx.container.planner.markTaken(it) }
+                    val planner = appCtx.container.planner
+                    ids.forEach { if (action == ACTION_TAKE_GROUP) planner.markTaken(it) else planner.markSkipped(it) }
                     ids.forEach { Notifications.dismiss(appCtx, it) }
                 } finally {
                     pendingGroup.finish()
@@ -43,17 +44,9 @@ class ActionReceiver : BroadcastReceiver() {
                     // Отметки снимают статус PENDING, а значит и обрывают цепочку повторов.
                     ACTION_TAKEN -> app.container.planner.markTaken(doseId)
                     ACTION_SKIPPED -> app.container.planner.markSkipped(doseId)
-                    // Отложить: статус не меняем, просто ставим будильник заново.
-                    ACTION_SNOOZE -> {
-                        val dose = app.container.db.doseDao().getById(doseId)
-                        if (dose != null) {
-                            val minutes = Settings(app).snoozeMinutes
-                            AlarmScheduler(app).schedule(
-                                dose = dose,
-                                triggerAt = System.currentTimeMillis() + minutes * 60_000L,
-                            )
-                        }
-                    }
+                    // Отложить: статус не меняем; момент запоминается в приёме, чтобы пересборка
+                    // будильников его не затёрла.
+                    ACTION_SNOOZE -> app.container.planner.snooze(doseId, Settings(app).snoozeMinutes)
                 }
                 Notifications.dismiss(app, doseId)
             } finally {
@@ -67,6 +60,7 @@ class ActionReceiver : BroadcastReceiver() {
         const val ACTION_SKIPPED = "tech.unispace.pillreminder.SKIPPED"
         const val ACTION_SNOOZE = "tech.unispace.pillreminder.SNOOZE"
         const val ACTION_TAKE_GROUP = "tech.unispace.pillreminder.TAKE_GROUP"
+        const val ACTION_SKIP_GROUP = "tech.unispace.pillreminder.SKIP_GROUP"
         const val EXTRA_DOSE_IDS = "doseIds"
     }
 }

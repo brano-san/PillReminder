@@ -1,9 +1,14 @@
 package tech.unispace.pillreminder.data
 
+import androidx.room.withTransaction
 import org.json.JSONArray
 import org.json.JSONObject
 import tech.unispace.pillreminder.ui.formatClock
+import java.time.Instant
 import java.time.LocalDate
+
+/** Файл создан более новой версией приложения — читать его текущий импорт не умеет. */
+class BackupTooNewException : Exception()
 
 /**
  * Полный бэкап базы в JSON и выгрузки в CSV.
@@ -11,7 +16,7 @@ import java.time.LocalDate
  */
 object Backup {
 
-    const val JSON_VERSION = 2
+    const val JSON_VERSION = 3
 
     suspend fun exportJson(db: AppDatabase): String {
         val root = JSONObject()
@@ -46,7 +51,8 @@ object Backup {
                             .put("afterMealMinutes", m.afterMealMinutes)
                             .put("apartFromOthersMinutes", m.apartFromOthersMinutes)
                             .put("apartFromMedIds", m.apartFromMedIds)
-                            .put("beforeMealMinutes", m.beforeMealMinutes),
+                            .put("beforeMealMinutes", m.beforeMealMinutes)
+                            .put("mealCalories", m.mealCalories),
                     )
                 }
             },
@@ -65,7 +71,9 @@ object Backup {
                             .put("status", d.status.name)
                             .put("takenAt", d.takenAt ?: JSONObject.NULL)
                             .put("amount", d.amount)
-                            .put("medNameSnapshot", d.medNameSnapshot),
+                            .put("medNameSnapshot", d.medNameSnapshot)
+                            .put("remindAt", d.remindAt ?: JSONObject.NULL)
+                            .put("attempt", d.attempt),
                     )
                 }
             },
@@ -81,7 +89,9 @@ object Backup {
                             .put("description", n.description)
                             .put("body", n.body)
                             .put("atMillis", n.atMillis)
-                            .put("tags", n.tags),
+                            .put("tags", n.tags)
+                            // Привязка к таблетке — по старому id, импорт переведёт через карту id.
+                            .put("medId", n.medId ?: JSONObject.NULL),
                     )
                 }
             },
@@ -178,9 +188,18 @@ object Backup {
         return root.toString(2)
     }
 
-    /** Полное восстановление: текущие данные стираются. Id пересоздаются с сохранением связей. */
+    /**
+     * Полное восстановление: текущие данные стираются. Id пересоздаются с сохранением связей.
+     * Файл разбирается и проверяется до очистки, а вся запись идёт одной транзакцией:
+     * битый или чужой файл откатывается и не оставляет пользователя с пустой базой.
+     */
     suspend fun importJson(db: AppDatabase, json: String) {
         val root = JSONObject(json)
+        if (root.optInt("version", 1) > JSON_VERSION) throw BackupTooNewException()
+        db.withTransaction { importParsed(db, root) }
+    }
+
+    private suspend fun importParsed(db: AppDatabase, root: JSONObject) {
         db.clearAllTables()
 
         val groupId = db.groupDao().insert(MedGroup(name = "Мои таблетки"))
@@ -213,6 +232,7 @@ object Backup {
                     afterMealMinutes = o.optInt("afterMealMinutes", 0),
                     apartFromOthersMinutes = o.optInt("apartFromOthersMinutes", 0),
                     beforeMealMinutes = o.optInt("beforeMealMinutes", 0),
+                    mealCalories = o.optInt("mealCalories", 0),
                     apartFromMedIds = o.optString("apartFromMedIds"),
                 ),
             )
@@ -244,6 +264,8 @@ object Backup {
                     takenAt = if (o.isNull("takenAt")) null else o.getLong("takenAt"),
                     amount = o.optDouble("amount", 1.0),
                     medNameSnapshot = o.optString("medNameSnapshot"),
+                    remindAt = if (o.isNull("remindAt")) null else o.getLong("remindAt"),
+                    attempt = o.optInt("attempt", 0),
                 ),
             )
         }
@@ -258,6 +280,8 @@ object Backup {
                     body = o.optString("body"),
                     atMillis = o.getLong("atMillis"),
                     tags = o.optString("tags"),
+                    // Таблетки нет в файле — заметка становится общей, а не теряется.
+                    medId = if (o.isNull("medId")) null else medIdMap[o.getLong("medId")],
                 ),
             )
         }
@@ -346,8 +370,12 @@ object Backup {
         }
     }
 
+    /**
+     * `cycle_day` — день цикла (плавающий, может начаться вчера вечером), поэтому рядом
+     * абсолютные метки `planned_at`/`taken_at` в ISO: приём в 00:30 не выглядит на сутки раньше.
+     */
     suspend fun dosesCsv(db: AppDatabase): String = buildString {
-        appendLine("date,time,medication,status,amount,planned_time")
+        appendLine("cycle_day,time,medication,status,amount,planned_time,planned_at,taken_at")
         dosesAll(db).sortedBy { it.plannedAt }.forEach { d ->
             val date = LocalDate.ofEpochDay(d.dayEpochDay)
             appendLine(
@@ -358,6 +386,8 @@ object Backup {
                     d.status.name,
                     d.amount.toString(),
                     formatClock(d.plannedAt),
+                    Instant.ofEpochMilli(d.plannedAt).toString(),
+                    d.takenAt?.let { Instant.ofEpochMilli(it).toString() } ?: "",
                 ).joinToString(","),
             )
         }
@@ -365,18 +395,20 @@ object Backup {
 
     suspend fun trackersCsv(db: AppDatabase): String = buildString {
         val types = db.trackerDao().getAll().associate { it.id to it.type }
-        appendLine("tracker,timestamp,value,note,sleep_start,sleep_end,awakenings,tags")
+        appendLine("tracker,timestamp,value,note,sleep_start,sleep_end,awakenings,tags,wake_value,auto")
         trackerEntriesAll(db).sortedBy { it.atMillis }.forEach { e ->
             appendLine(
                 listOf(
                     types[e.trackerId] ?: "?",
-                    java.time.Instant.ofEpochMilli(e.atMillis).toString(),
+                    Instant.ofEpochMilli(e.atMillis).toString(),
                     e.value.toString(),
                     csv(e.note),
-                    e.sleepStart?.let { java.time.Instant.ofEpochMilli(it).toString() } ?: "",
-                    e.sleepEnd?.let { java.time.Instant.ofEpochMilli(it).toString() } ?: "",
+                    e.sleepStart?.let { Instant.ofEpochMilli(it).toString() } ?: "",
+                    e.sleepEnd?.let { Instant.ofEpochMilli(it).toString() } ?: "",
                     e.awakenings.toString(),
                     csv(e.tags),
+                    e.wakeValue?.toString() ?: "",
+                    e.auto.toString(),
                 ).joinToString(","),
             )
         }

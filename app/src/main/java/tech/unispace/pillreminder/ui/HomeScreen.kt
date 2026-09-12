@@ -96,10 +96,15 @@ import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.alarm.formatAmount
 import tech.unispace.pillreminder.alarm.trackerDisplayName
 import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import tech.unispace.pillreminder.data.EARLY_TAKE_THRESHOLD_MS
+import tech.unispace.pillreminder.data.MEAL_WAIT_MAX_MS
 import tech.unispace.pillreminder.data.Medication
 import tech.unispace.pillreminder.data.TrackerType
 import tech.unispace.pillreminder.data.Dose
+import tech.unispace.pillreminder.data.askTimesList
 import tech.unispace.pillreminder.data.byClock
 import tech.unispace.pillreminder.data.fixedTimesList
 import tech.unispace.pillreminder.data.Settings
@@ -122,23 +127,26 @@ private val GREEN = Color(0xFF4CAF50)
 private val AMBER = Color(0xFFFFC107)
 private val RED = Color(0xFFE53935)
 
-/** За сколько до планового времени отметка «выпил» считается преждевременной. */
-const val EARLY_TAKE_THRESHOLD_MS = 60 * 60_000L
-
 @Composable
 fun HomeScreen(
     state: HomeState,
     trackerRows: List<TrackerRow>,
     contentPadding: PaddingValues,
     onWakeUp: () -> Unit,
+    /** «Начать новый день» и ручной сброс: без записи сна, в отличие от [onWakeUp]. */
+    onRestartDay: () -> Unit,
     onTake: (Long) -> Unit,
-    onTakeNow: (Long) -> Unit,
+    /** «Принять сейчас»: колбэк получает id записи для «Вернуть». */
+    onTakeNow: (medId: Long, onDone: (Long) -> Unit) -> Unit,
+    /** Отмена «Принять сейчас» — запись удаляется целиком. */
+    onDeleteIntake: (Long) -> Unit,
     onSkip: (Long) -> Unit,
     onEdit: (Long) -> Unit,
     onAdd: () -> Unit,
     onDelete: (Long) -> Unit,
     onUndo: (Long) -> Unit,
-    onTakeAll: () -> Unit,
+    /** «Выпить всё, что пора»: колбэк получает отмеченные id для «Вернуть». */
+    onTakeAll: (onDone: (List<Long>) -> Unit) -> Unit,
     onReorder: (List<Long>) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTracker: (Long) -> Unit,
@@ -159,11 +167,11 @@ fun HomeScreen(
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    fun confirmWithUndo(message: String, doseId: Long) {
+    fun confirmWithUndo(message: String, undo: () -> Unit) {
         scope.launch {
             snackbars.currentSnackbarData?.dismiss()
             val result = snackbars.showSnackbar(message = message, actionLabel = s.undo, duration = SnackbarDuration.Short)
-            if (result == SnackbarResult.ActionPerformed) onUndo(doseId)
+            if (result == SnackbarResult.ActionPerformed) undo()
         }
     }
 
@@ -179,13 +187,28 @@ fun HomeScreen(
     deleteTarget?.let { row ->
         ConfirmDeleteDialog(title = row.med.name, onConfirm = { onDelete(row.med.id) }, onDismiss = { deleteTarget = null })
     }
-    // Долгое нажатие теперь предлагает выбор: копия схемы нужна чаще, чем удаление.
+    // Долгое нажатие предлагает выбор: копия схемы нужна чаще, чем удаление; в компактном режиме
+    // здесь же живёт «Пропустить» — на карточке для него места нет.
     var actionTarget by remember { mutableStateOf<MedRow?>(null) }
     actionTarget?.let { row ->
+        val next = row.nextDose
         AlertDialog(
             onDismissRequest = { actionTarget = null },
             title = { Text(row.med.name) },
-            text = null,
+            text = if (next != null && !row.med.asNeeded) {
+                {
+                    OutlinedButton(
+                        onClick = {
+                            onSkip(next.id)
+                            confirmWithUndo(s.snackSkipped(row.med.name)) { onUndo(next.id) }
+                            actionTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(s.skip, maxLines = 1, softWrap = false) }
+                }
+            } else {
+                null
+            },
             confirmButton = {
                 TextButton(onClick = {
                     onDuplicate(row.med.id)
@@ -222,7 +245,7 @@ fun HomeScreen(
         if (bedAt > 0 && slept < SHORT_SLEEP_MS) shortSleep = slept else onWakeUp()
     }
 
-    // Сон, собранный кнопками «Ложусь спать» → «Я проснулся»: просим оценить сразу.
+    // Сон, собранный кнопками «Сон» → «Подъём»: просим оценить сразу.
     sleepToRate?.let { entry ->
         var sleepRating by remember(entry.id) { mutableIntStateOf(4) }
         var wakeRating by remember(entry.id) { mutableIntStateOf(4) }
@@ -284,17 +307,25 @@ fun HomeScreen(
             }
 
             item(key = "wake") {
-                WakeCard(state, onWakeUp, onOpenTips, onOpenTutorial, onOpenReport, onBedtime, onMeal)
+                WakeCard(state, onRestartDay, onOpenTips, onOpenTutorial, onOpenReport)
             }
 
             if (state.rows.isEmpty() && state.loaded) {
                 item(key = "empty") { EmptyHint() }
             }
 
-            val dueCount = orderedRows.count { r -> r.nextDose?.let { it.plannedAt <= state.now } == true }
+            // Ждущий еду приём «пора» не считается: кнопка обещает ровно то, что отметит планировщик.
+            val dueCount = orderedRows.count { r -> !r.waitsMeal && r.nextDose?.let { it.plannedAt <= state.now } == true }
             if (dueCount >= 2) {
                 item(key = "take-all") {
-                    Button(onClick = onTakeAll, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Button(
+                        onClick = {
+                            onTakeAll { ids ->
+                                if (ids.isNotEmpty()) confirmWithUndo(s.snackTakenAll(ids.size)) { ids.forEach(onUndo) }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                    ) {
                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text(s.takeAllBtn(dueCount), maxLines = 1, softWrap = false)
@@ -308,17 +339,20 @@ fun HomeScreen(
                 MedCard(
                     row = row,
                     now = state.now,
-                    // Расписание «по часам» живёт без кнопки «я проснулся».
-                    awake = state.wokeUpAt != null || row.med.byClock,
+                    // Расписание «по часам» живёт без кнопки «Подъём»; уже запланированный приём — тоже
+                    // доказательство, что день размечен (цикл мог истечь по 18-часовому лимиту).
+                    awake = state.wokeUpAt != null || row.med.byClock || row.nextDose != null,
                     compact = compact,
                     onTake = { doseId ->
                         onTake(doseId)
-                        confirmWithUndo(s.snackTaken(row.med.name), doseId)
+                        confirmWithUndo(s.snackTaken(row.med.name)) { onUndo(doseId) }
                     },
-                    onTakeNow = onTakeNow,
+                    onTakeNow = { medId ->
+                        onTakeNow(medId) { doseId -> confirmWithUndo(s.snackTaken(row.med.name)) { onDeleteIntake(doseId) } }
+                    },
                     onSkip = { doseId ->
                         onSkip(doseId)
-                        confirmWithUndo(s.snackSkipped(row.med.name), doseId)
+                        confirmWithUndo(s.snackSkipped(row.med.name)) { onUndo(doseId) }
                     },
                     onEdit = onEdit,
                     onLongPress = { actionTarget = it },
@@ -374,77 +408,80 @@ fun HomeScreen(
             }
 
             items(trackerRows, key = { "tracker-" + it.tracker.id }) { row ->
-                TrackerReminderCard(row, onOpenTracker, onQuickEntry)
+                TrackerReminderCard(row, state.now, onOpenTracker, onQuickEntry)
             }
         }
 
-        // Нижняя строка: «Я проснулся» слева (пока день не начат) и «+ Таблетка» справа.
-        Row(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // Один слот на весь суточный цикл: утром это «Я проснулся», днём — «Ложусь спать».
-            if (showWakeButton) {
-                Button(
-                    onClick = { wakeUpChecked() },
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.weight(1f).height(56.dp),
-                ) {
-                    Icon(Icons.Default.WbSunny, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(s.iWokeUp, style = MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false)
+        // Нижняя строка: «Подъём» слева (пока день не начат) и «+ Таблетка» справа.
+        // До загрузки состояния не рисуем: иначе на долю секунды мигают «Сон»/«Еда».
+        if (state.loaded) {
+            Row(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // Один слот на весь суточный цикл: утром это «Подъём», днём — «Сон».
+                if (showWakeButton) {
+                    Button(
+                        onClick = { wakeUpChecked() },
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.weight(1f).height(56.dp),
+                    ) {
+                        Icon(Icons.Default.WbSunny, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(s.iWokeUp, style = MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false)
+                    }
+                } else {
+                    val bedtimeAt = remember(state.now / 60_000) { Settings(context).pendingSleepStart }
+                    FilledTonalButton(
+                        onClick = {
+                            onBedtime()
+                            Toast.makeText(context, s.bedtimeSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        modifier = Modifier.weight(1f).height(56.dp),
+                    ) {
+                        Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (bedtimeAt > 0) s.bedtimeShort(formatClock(bedtimeAt)) else s.bedtimeBtn,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    // «Еда» рядом: обе кнопки относятся к текущему дню.
+                    FilledTonalButton(
+                        onClick = {
+                            onMeal()
+                            Toast.makeText(context, s.mealSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        modifier = Modifier.weight(1f).height(56.dp),
+                    ) {
+                        Icon(Icons.Default.Restaurant, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            s.mealBtn,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
-            } else {
-                val bedtimeAt = remember(state.now / 60_000) { Settings(context).pendingSleepStart }
-                FilledTonalButton(
-                    onClick = {
-                        onBedtime()
-                        Toast.makeText(context, s.bedtimeSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
-                    },
-                    shape = RoundedCornerShape(16.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp),
-                    modifier = Modifier.weight(1f).height(56.dp),
-                ) {
-                    Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (bedtimeAt > 0) s.bedtimeShort(formatClock(bedtimeAt)) else s.bedtimeBtn,
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                // «Поел» рядом: обе кнопки относятся к текущему дню.
-                FilledTonalButton(
-                    onClick = {
-                        onMeal()
-                        Toast.makeText(context, s.mealSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
-                    },
-                    shape = RoundedCornerShape(16.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp),
-                    modifier = Modifier.weight(1f).height(56.dp),
-                ) {
-                    Icon(Icons.Default.Restaurant, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        s.mealBtn,
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                ExtendedFloatingActionButton(
+                    onClick = onAdd,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text(s.pillFab, maxLines = 1, softWrap = false) },
+                )
             }
-            ExtendedFloatingActionButton(
-                onClick = onAdd,
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                text = { Text(s.pillFab, maxLines = 1, softWrap = false) },
-            )
         }
 
         SnackbarHost(
@@ -457,12 +494,10 @@ fun HomeScreen(
 @Composable
 private fun WakeCard(
     state: HomeState,
-    onWakeUp: () -> Unit,
+    onRestartDay: () -> Unit,
     onOpenTips: () -> Unit,
     onOpenTutorial: () -> Unit,
     onOpenReport: () -> Unit,
-    onBedtime: () -> Unit,
-    onMeal: () -> Unit,
 ) {
     val s = Lang.s
     val context = LocalContext.current
@@ -474,7 +509,7 @@ private fun WakeCard(
             onDismissRequest = { confirmNewDay = false },
             title = { Text(s.newDayConfirmTitle) },
             text = { Text(s.newDayConfirmBody) },
-            confirmButton = { TextButton(onClick = { confirmNewDay = false; onWakeUp() }) { Text(s.newDayBtn) } },
+            confirmButton = { TextButton(onClick = { confirmNewDay = false; onRestartDay() }) { Text(s.newDayBtn) } },
             dismissButton = { TextButton(onClick = { confirmNewDay = false }) { Text(s.cancel) } },
         )
     }
@@ -485,10 +520,12 @@ private fun WakeCard(
             onDismissRequest = { confirmShift = false },
             title = { Text(s.resetDayTitle) },
             text = { Text(s.resetDayBody) },
-            confirmButton = { TextButton(onClick = { confirmShift = false; onWakeUp() }) { Text(s.resetDayConfirm) } },
+            confirmButton = { TextButton(onClick = { confirmShift = false; onRestartDay() }) { Text(s.resetDayConfirm) } },
             dismissButton = { TextButton(onClick = { confirmShift = false }) { Text(s.cancel) } },
         )
     }
+    // После «Сон» до подъёма — не «Доброе утро», а «Спокойной ночи».
+    val sleepingSince = remember(state.now / 60_000, state.wokeUpAt) { if (state.wokeUpAt == null) settings.pendingSleepStart else 0L }
 
     // Ручной сброс дня спрятан под долгое нажатие: он нужен редко, а злоупотреблять им вредно.
     ElevatedCard(
@@ -499,16 +536,49 @@ private fun WakeCard(
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.WbSunny, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(
+                    if (sleepingSince > 0) Icons.Default.Bedtime else Icons.Default.WbSunny,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    if (state.wokeUpAt == null) {
-                        Text(s.goodMorning, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(s.wakeIntro, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        Text(s.wokeAt(formatClock(state.wokeUpAt)), fontWeight = FontWeight.SemiBold)
-                        Text(s.dayPlanned, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    when {
+                        state.wokeUpAt == null && sleepingSince > 0 -> {
+                            Text(s.goodNight, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(s.sleepSince(formatClock(sleepingSince)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        state.wokeUpAt == null -> {
+                            Text(s.goodMorning, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(s.wakeIntro, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        else -> {
+                            Text(s.wokeAt(formatClock(state.wokeUpAt)), fontWeight = FontWeight.SemiBold)
+                            Text(s.dayPlanned, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
+                }
+            }
+            // Схема дня: подъём → таблетки → еда → сон. Пересобирается раз в минуту, а не раз в секунду.
+            if (state.wokeUpAt != null && settings.showDayTimeline) {
+                val minute = state.now / 60_000
+                // Ключи сравниваются по содержимому: rows пересоздаются каждую секунду, а карта форм и набор ждущих — нет.
+                val formById = state.rows.associate { it.med.id to it.med.form }
+                val waitingIds = state.rows.filter { it.waitsMeal }.mapNotNull { it.nextDose?.id }.toSet()
+                val nodes = remember(state.doses, state.meals, state.wokeUpAt, state.bedAt, formById, waitingIds, minute) {
+                    buildTimelineNodes(
+                        wakeAt = state.wokeUpAt,
+                        bedAt = state.bedAt,
+                        doses = state.doses,
+                        formById = formById,
+                        meals = state.meals,
+                        now = state.now,
+                        waitingIds = waitingIds,
+                    )
+                }
+                if (nodes.size > 1) {
+                    Spacer(Modifier.height(10.dp))
+                    DayTimeline(nodes, state.now, Modifier.fillMaxWidth())
                 }
             }
             if (state.wokeUpAt != null && state.allDone) {
@@ -522,7 +592,6 @@ private fun WakeCard(
             if (showActions) {
                 Spacer(Modifier.height(4.dp))
                 // Кнопки одинаковой ширины: ряд не «прыгает» из-за разной длины подписей.
-                // Компактный ряд: место на экране нужнее таблеткам, чем кнопкам.
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                     HomeActionButton(Icons.Default.Description, s.reportBtn, Modifier.weight(1f), onOpenReport)
                     HomeActionButton(Icons.Default.Lightbulb, s.tipsButton, Modifier.weight(1f), onOpenTips)
@@ -536,6 +605,7 @@ private fun WakeCard(
 @Composable
 private fun TrackerReminderCard(
     row: TrackerRow,
+    now: Long,
     onOpen: (Long) -> Unit,
     onQuickEntry: (TrackerEntry) -> Unit,
 ) {
@@ -543,6 +613,11 @@ private fun TrackerReminderCard(
     val last = row.entries.firstOrNull()
     val lastDay = last?.let { epochDayOf(it.atMillis) }
     val doneToday = lastDay == today()
+    // Красным — только когда первое время опроса уже прошло и напоминания включены:
+    // в семь утра «Сегодня данных нет» о вечернем трекере не тревога, а факт.
+    val minutesNow = LocalTime.now(ZoneId.systemDefault()).let { it.hour * 60 + it.minute }
+    val askPassed = row.tracker.remindEnabled && minutesNow >= row.tracker.askTimesList().first()
+    val subtitleColor = if (doneToday || !askPassed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
 
     Card(Modifier.fillMaxWidth().clickable { onOpen(row.tracker.id) }) {
       Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -558,19 +633,19 @@ private fun TrackerReminderCard(
                         else -> s.trackerNotToday + ", " + s.neverRecorded
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (doneToday) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                    color = subtitleColor,
                 )
             }
             if (doneToday) Icon(Icons.Default.Check, contentDescription = null, tint = GREEN)
         }
         // Кулдаун вместо «раз в день»: настроение и вес часто хочется поправить сразу.
-        val quietFor = last != null && System.currentTimeMillis() - last.atMillis < QUICK_ENTRY_COOLDOWN_MS
+        val quietFor = last != null && now - last.atMillis < QUICK_ENTRY_COOLDOWN_MS
         if (!quietFor) QuickTrackerEntry(row, onQuickEntry)
       }
     }
 }
 
-/** Кнопка ряда действий: иконка над подписью, ширина — по колонке. */
+/** Кнопка ряда действий: иконка над подписью, ширина — по колонке. Высота 40 dp — минимум для пальца. */
 @Composable
 private fun HomeActionButton(
     icon: ImageVector,
@@ -580,7 +655,7 @@ private fun HomeActionButton(
 ) {
     TextButton(
         onClick = onClick,
-        modifier = modifier.height(34.dp),
+        modifier = modifier.height(40.dp),
         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
     ) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp))
@@ -620,11 +695,12 @@ private fun QuickTrackerEntry(row: TrackerRow, onQuickEntry: (TrackerEntry) -> U
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { value = (value - 0.1).coerceAtLeast(1.0) }, contentPadding = PaddingValues(horizontal = 12.dp)) {
-                    Text("−0,1", maxLines = 1, softWrap = false)
+                    Text(s.weightStepMinus, maxLines = 1, softWrap = false)
                 }
-                Text(trimNum(value), fontWeight = FontWeight.SemiBold)
+                // Разделитель дроби — по языку приложения, как и на кнопках рядом.
+                Text(String.format(s.locale, "%.1f", value), fontWeight = FontWeight.SemiBold)
                 OutlinedButton(onClick = { value = (value + 0.1).coerceAtMost(500.0) }, contentPadding = PaddingValues(horizontal = 12.dp)) {
-                    Text("+0,1", maxLines = 1, softWrap = false)
+                    Text(s.weightStepPlus, maxLines = 1, softWrap = false)
                 }
                 Spacer(Modifier.weight(1f))
                 Button(
@@ -670,7 +746,7 @@ fun stockRunsOut(med: Medication): Long? {
 fun shortDayText(day: Long): String =
     LocalDate.ofEpochDay(day).format(DateTimeFormatter.ofPattern("d MMMM", Lang.s.locale))
 
-/** Маленькая «таблетка»-метка с фактом о лекарстве; переносится строкой во FlowRow. */
+/** Маленькая «таблетка»-метка с фактом о лекарстве; переносится строкой во FlowRow, длинная — с многоточием. */
 @Composable
 private fun InfoPill(text: String) {
     Text(
@@ -679,6 +755,7 @@ private fun InfoPill(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         softWrap = false,
+        overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
             .padding(horizontal = 8.dp, vertical = 3.dp),
@@ -717,12 +794,15 @@ private fun MedCard(
     fun takeChecked(d: Dose) {
         if (d.plannedAt - System.currentTimeMillis() > EARLY_TAKE_THRESHOLD_MS) earlyDose = d else onTake(d.id)
     }
-    val overdue = next != null && next.plannedAt <= now
+    // Ждать еду можно не бесконечно: через MEAL_WAIT_MAX_MS будильник звонит и без «Еда» — карточка краснеет вместе с ним.
+    val mealTimedOut = row.waitsMeal && next != null && now - next.plannedAt >= MEAL_WAIT_MAX_MS
+    val overdue = next != null && next.plannedAt <= now && (!row.waitsMeal || mealTimedOut)
     val done = row.dueToday && next == null && row.takenToday > 0
-    val hasPlan = next != null || row.takenToday > 0
+    val hasPlan = next != null || row.takenToday > 0 || row.skippedToday > 0
 
     val border = when {
         row.med.asNeeded || !row.dueToday || !awake || !hasPlan -> null
+        next == null && row.skippedToday > 0 -> BorderStroke(2.dp, AMBER)
         next == null && row.takenToday > 0 -> BorderStroke(2.dp, GREEN)
         row.takenToday > 0 -> BorderStroke(2.dp, AMBER)
         else -> BorderStroke(2.dp, RED)
@@ -730,13 +810,16 @@ private fun MedCard(
 
     // Факты о лекарстве — отдельными метками, чтобы длинный набор переносился аккуратно.
     val pills = buildList {
-        add(listOf(row.med.form, row.med.doseInfo).filter { it.isNotBlank() }.joinToString(" "))
+        add(listOf(s.formName(row.med.form), row.med.doseInfo).filter { it.isNotBlank() }.joinToString(" "))
         add(s.perIntake(formatAmount(row.med.dosesPerIntake, row.med.form)))
+        // Связь с едой — такие же факты, как форма и дозировка; каждое правило своей меткой.
+        s.mealRelationParts(row.med.afterMealMinutes, row.med.beforeMealMinutes, row.med.mealCalories).forEach { add(it) }
         if (row.med.byClock) {
             add(s.byClockShort + " " + row.med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) })
         }
         row.med.stockCount?.let { stock ->
-            add(s.stockLeft(if (stock % 1.0 == 0.0) stock.toInt().toString() else stock.toString()))
+            val shown = stock.coerceAtLeast(0.0)
+            add(s.stockLeft(if (shown % 1.0 == 0.0) shown.toInt().toString() else shown.toString()))
             // Прогноз «на сколько хватит» полезнее голого остатка.
             stockRunsOut(row.med)?.let { day -> add(s.stockUntil(shortDayText(day))) }
         }
@@ -759,39 +842,69 @@ private fun MedCard(
         colors = CardDefaults.cardColors(
             containerColor = when {
                 overdue -> MaterialTheme.colorScheme.errorContainer
-                done -> MaterialTheme.colorScheme.surfaceVariant
+                // Не surfaceVariant: на нём метки-«таблетки» того же цвета сливались с фоном.
+                done -> MaterialTheme.colorScheme.surfaceContainer
                 else -> MaterialTheme.colorScheme.surface
             },
         ),
     ) {
         Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = if (compact) 8.dp else 12.dp)) {
+            val showTime = next != null && awake && row.dueToday
+            val timeColor = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            val subColor = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+            val subText = when {
+                next == null -> ""
+                mealTimedOut -> s.mealNotMarked
+                // «ждёт «Еда»» — только когда время уже наступило; до того полезнее обратный отсчёт.
+                row.waitsMeal && next.plannedAt <= now -> s.waitsMealShort
+                else -> s.countdown(next.plannedAt - now)
+            }
+            // Компактный режим без времени всё равно объясняет, почему нет кнопки.
+            val compactStatus = when {
+                row.med.asNeeded -> null
+                !row.dueToday -> s.notTodayShort
+                !awake -> s.waitingWakeShort
+                next == null && row.takenToday == 0 && row.skippedToday == 0 && row.linkedParentName != null -> s.waitsForShort(row.linkedParentName)
+                next == null && (row.takenToday > 0 || row.skippedToday > 0) -> s.allDoneShort
+                else -> null
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(formIcon(row.med.form), contentDescription = row.med.form, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                Icon(formIcon(row.med.form), contentDescription = s.formName(row.med.form), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(10.dp))
+                // В полном режиме название не делит строку со временем: «Эсциталопрам» не ломается по буквам.
                 Text(
                     row.med.name,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (next != null && awake && row.dueToday) {
+                if (compact && next != null && showTime) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
                             formatClock(next.plannedAt),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                            color = timeColor,
                         )
-                        Text(
-                            s.countdown(next.plannedAt - now),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            softWrap = false,
-                        )
+                        Text(subText, style = MaterialTheme.typography.labelSmall, color = subColor, maxLines = 1, softWrap = false)
                     }
+                } else if (compact && compactStatus != null) {
+                    Text(
+                        compactStatus,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
                 }
-                Icon(Icons.Default.DragHandle, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = dragHandleModifier.padding(start = 6.dp).size(28.dp))
+                // Ручка перетаскивания — полноценная цель 48 dp и подпись для TalkBack.
+                Box(dragHandleModifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.DragHandle, contentDescription = s.dragHandle, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
+                }
                 if (compact) {
                     when {
                         row.med.asNeeded -> FilledTonalIconButton(onClick = { onTakeNow(row.med.id) }) { Icon(Icons.Default.Check, contentDescription = s.takeNow) }
@@ -800,6 +913,27 @@ private fun MedCard(
                     }
                 } else {
                     IconButton(onClick = { onEdit(row.med.id) }) { Icon(Icons.Default.Edit, contentDescription = s.edit) }
+                }
+            }
+
+            // Полный режим: время — отдельной строкой, крупно, с обратным отсчётом рядом.
+            if (!compact && next != null && showTime) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        formatClock(next.plannedAt),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = timeColor,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        subText,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = subColor,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
                 }
             }
 
@@ -846,20 +980,27 @@ private fun MedCard(
                     }
                     !row.dueToday -> StatusLine(s.notTodayEveryN(row.med.everyNDays))
                     !awake -> StatusLine(s.waitingWake)
-                    next == null && row.takenToday == 0 && row.linkedParentName != null -> StatusLine(s.waitsFor(row.linkedParentName))
+                    next == null && row.takenToday == 0 && row.skippedToday == 0 && row.linkedParentName != null -> StatusLine(s.waitsFor(row.linkedParentName))
+                    // Закрытый набор с пропуском — не «всё выпито»: пишем честно, сколько выпито.
+                    next == null && row.takenToday < row.totalToday -> StatusLine(s.setClosedPartial(row.takenToday, row.totalToday))
                     next == null -> StatusLine(s.allDone(row.takenToday, row.totalToday))
-                    else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    else -> Column {
+                        // Счётчик своей строкой: в одном ряду с двумя кнопками ему оставалось несколько dp.
                         Text(
-                            s.intakeOf(next.indexInDay + 1, row.totalToday),
+                            s.intakeOf(row.nextIndexInSet, row.totalToday),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f),
                         )
-                        OutlinedButton(onClick = { onSkip(next.id) }, modifier = Modifier.height(44.dp)) { Text(s.skip, maxLines = 1, softWrap = false) }
-                        Button(onClick = { takeChecked(next) }, modifier = Modifier.height(44.dp)) {
-                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(s.took, maxLines = 1, softWrap = false)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(onClick = { onSkip(next.id) }, modifier = Modifier.weight(1f).height(44.dp)) {
+                                Text(s.skip, maxLines = 1, softWrap = false)
+                            }
+                            Button(onClick = { takeChecked(next) }, modifier = Modifier.weight(1f).height(44.dp)) {
+                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(s.took, maxLines = 1, softWrap = false)
+                            }
                         }
                     }
                 }

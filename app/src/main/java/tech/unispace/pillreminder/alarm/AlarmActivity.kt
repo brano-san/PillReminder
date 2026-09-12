@@ -47,23 +47,29 @@ class AlarmActivity : ComponentActivity() {
         setTurnScreenOn(true)
 
         val doseId = intent.getLongExtra(Notifications.EXTRA_DOSE_ID, -1L)
+        // Группа «3 таблетки»: большие кнопки отмечают все приёмы, а не только старший.
+        val ids = intent.getLongArrayExtra(ActionReceiver.EXTRA_DOSE_IDS)?.toList()?.takeIf { it.isNotEmpty() } ?: listOf(doseId)
+        val attempt = intent.getIntExtra(EXTRA_ATTEMPT, 0)
         val title = intent.getStringExtra(EXTRA_TITLE) ?: Lang.s.timeToTakeFallback
         val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
         // Варианты «Отложить» настраиваются в «Повторах».
         val snoozeOptions = Settings(this).snoozeOptions
-        // Честная подпись: повтор придёт через интервал повторов, а если они выключены — не придёт.
+        // Честная подпись: повтор придёт через интервал повторов; на последнем повторе или при
+        // выключенных повторах — не придёт; в тихие часы — придёт по их окончании.
         val settings = Settings(this)
-        val closeText = if (settings.repeatEnabled) {
-            Lang.s.fsCloseIn(Lang.s.duration(settings.repeatIntervalMinutes))
-        } else {
-            Lang.s.fsCloseNoRepeat
+        val now = System.currentTimeMillis()
+        val nextRepeat = now + settings.repeatIntervalMinutes * 60_000L
+        val closeText = when {
+            !settings.repeatEnabled || attempt + 1 >= settings.repeatCount -> Lang.s.fsCloseNoRepeat
+            isQuiet(settings, nextRepeat) -> Lang.s.fsCloseAt(formatClock(quietEndMillis(settings, nextRepeat)))
+            else -> Lang.s.fsCloseIn(Lang.s.duration(settings.repeatIntervalMinutes))
         }
 
         fun act(action: suspend (Long) -> Unit) {
             lifecycleScope.launch {
-                if (doseId >= 0) {
-                    action(doseId)
-                    Notifications.dismiss(this@AlarmActivity, doseId)
+                ids.filter { it >= 0 }.forEach { id ->
+                    action(id)
+                    Notifications.dismiss(this@AlarmActivity, id)
                 }
                 finish()
             }
@@ -105,7 +111,7 @@ class AlarmActivity : ComponentActivity() {
                             onClick = { act { container.planner.markTaken(it) } },
                             modifier = Modifier.fillMaxWidth().height(64.dp),
                         ) {
-                            Text(Lang.s.took, style = MaterialTheme.typography.titleLarge)
+                            Text(if (ids.size > 1) Lang.s.takeAllAction else Lang.s.took, style = MaterialTheme.typography.titleLarge, maxLines = 1, softWrap = false)
                         }
                         Spacer(Modifier.height(12.dp))
                         Column(
@@ -116,15 +122,8 @@ class AlarmActivity : ComponentActivity() {
                                 OutlinedButton(
                                     onClick = {
                                         lifecycleScope.launch {
-                                            if (doseId >= 0) {
-                                                container.db.doseDao().getById(doseId)?.let { dose ->
-                                                    AlarmScheduler(this@AlarmActivity).schedule(
-                                                        dose = dose,
-                                                        triggerAt = System.currentTimeMillis() + minutes * 60_000L,
-                                                    )
-                                                }
-                                                Notifications.dismiss(this@AlarmActivity, doseId)
-                                            }
+                                            // Момент «отложить» живёт в приёме — пересборка будильников его уважает.
+                                            if (doseId >= 0) container.planner.snooze(doseId, minutes)
                                             finish()
                                         }
                                     },
@@ -145,7 +144,7 @@ class AlarmActivity : ComponentActivity() {
                             ),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                         ) {
-                            Text(Lang.s.skip)
+                            Text(if (ids.size > 1) Lang.s.skipAllAction else Lang.s.skip, maxLines = 1, softWrap = false)
                         }
                         Spacer(Modifier.height(12.dp))
                         TextButton(onClick = { finish() }, modifier = Modifier.fillMaxWidth()) {
@@ -160,5 +159,6 @@ class AlarmActivity : ComponentActivity() {
     companion object {
         const val EXTRA_TITLE = "title"
         const val EXTRA_TEXT = "text"
+        const val EXTRA_ATTEMPT = "attempt"
     }
 }

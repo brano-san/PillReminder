@@ -35,6 +35,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -125,10 +126,10 @@ class MainActivity : FragmentActivity() {
         val settings = Settings(this)
         setContent {
             PillTheme {
-                // ÐÐ°Ð»Ð¸Ð²ÐºÐ° Ð½Ð° Ð²ÑÑ Ð¾ÐºÐ½Ð¾: Ð¸Ð½Ð°ÑÐµ Ð¿ÑÐ¸ Ð¾ÑÐºÑÑÑÐ¸Ð¸ ÐºÐ»Ð°Ð²Ð¸Ð°ÑÑÑÑ Ð²Ð½Ð¸Ð·Ñ Ð²Ð¸Ð´Ð½Ð° Ð¿Ð¾Ð»Ð¾ÑÐ° ÑÐ¾Ð½Ð° Ð¾ÐºÐ½Ð°.
+                // Заливка на всё окно: иначе при открытой клавиатуре внизу видна полоса фона окна.
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     // Медицинские данные: при включённом замке экран открывается только после проверки.
-                    var unlocked by remember { mutableStateOf(!settings.appLockEnabled) }
+                    var unlocked by rememberSaveable { mutableStateOf(!settings.appLockEnabled) }
                     if (unlocked) {
                         AppRoot()
                     } else {
@@ -242,14 +243,16 @@ private fun AppRoot() {
                     trackerRows = trackerRows,
                     contentPadding = tabPadding,
                     onWakeUp = { vm.wakeUp() },
+                    onRestartDay = { vm.restartDay() },
                     onTake = { vm.take(it) },
-                    onTakeNow = { vm.takeNow(it) },
+                    onTakeNow = { medId, done -> vm.takeNow(medId, done) },
+                    onDeleteIntake = { vm.deleteIntake(it) },
                     onSkip = { vm.skip(it) },
                     onEdit = { nav.navigate("edit/" + it) },
                     onAdd = { nav.navigate("edit/0") },
                     onDelete = { vm.delete(it) },
                     onUndo = { vm.undo(it) },
-                    onTakeAll = { vm.takeAllDue() },
+                    onTakeAll = { done -> vm.takeAllDue(done) },
                     onReorder = { vm.saveMedOrder(it) },
                     onOpenSettings = { nav.navigate(ROUTE_SETUP_DELIVERY) },
                     onOpenTracker = { nav.navigate("tracker/" + it) },
@@ -291,6 +294,7 @@ private fun AppRoot() {
                     rows = trackerRows,
                     onOpen = { nav.navigate("tracker/" + it) },
                     onCreate = { type -> nav.navigate("trackerEdit/0/" + type) },
+                    onCreateAll = { types -> vm.createTrackers(types) },
                     onAddEntry = { vm.addTrackerEntry(it) },
                     onOpenCorrelations = { nav.navigate(ROUTE_CORRELATIONS) },
                     contentPadding = tabPadding,
@@ -309,6 +313,9 @@ private fun AppRoot() {
                     onSelectDay = { vm.selectedDay.value = it },
                     onMonthShift = { delta -> vm.heatMonthStart.value = vm.heatMonthStart.value.plusMonths(delta) },
                     onUndo = { vm.undo(it) },
+                    onTakeAt = { doseId, at -> vm.takeAt(doseId, at) },
+                    onSkip = { vm.skip(it) },
+                    onDeleteMeal = { vm.deleteMeal(it) },
                     contentPadding = tabPadding,
                 )
             }

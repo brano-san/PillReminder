@@ -96,6 +96,10 @@ object Notifications {
         manager.createNotificationChannels(listOf(default, alarm, visits))
     }
 
+    /**
+     * Напоминание об одном приёме. [withActions] = false — для служебных уведомлений (проверка связи,
+     * «пора нажать «Подъём»»), за которыми нет приёма: кнопки «Выпито/Пропустить/Отложить» там мёртвые.
+     */
     fun show(
         context: Context,
         doseId: Long,
@@ -104,6 +108,7 @@ object Notifications {
         useAlarmChannel: Boolean,
         attempt: Int = 0,
         fullScreen: Boolean = false,
+        withActions: Boolean = true,
     ) {
         val open = PendingIntent.getActivity(
             context,
@@ -116,7 +121,7 @@ object Notifications {
         val snoozeMin = Settings(context).snoozeMinutes
         val snoozed = action(context, doseId, ActionReceiver.ACTION_SNOOZE, "snooze")
 
-        val fullText = if (attempt > 0) text + "\n" + Lang.s.reminderN(attempt + 1) else text
+        val fullText = withAttempt(text, attempt)
 
         val builder = NotificationCompat.Builder(
             context,
@@ -135,41 +140,57 @@ object Notifications {
             // Каждый повтор должен снова звучать, а не появляться молча.
             .setOnlyAlertOnce(false)
             .setContentIntent(open)
-            .addAction(R.drawable.ic_pill, Lang.s.took, took)
-            .addAction(R.drawable.ic_pill, Lang.s.skip, skipped)
-            .addAction(R.drawable.ic_pill, Lang.s.snoozeAction(snoozeMin), snoozed)
+        if (withActions) {
+            builder
+                .addAction(R.drawable.ic_pill, Lang.s.took, took)
+                .addAction(R.drawable.ic_pill, Lang.s.skip, skipped)
+                .addAction(R.drawable.ic_pill, Lang.s.snoozeAction(snoozeMin), snoozed)
+        }
 
         if (fullScreen) {
-            // Со заблокированным/погасшим экраном система откроет AlarmActivity во весь экран,
-            // при разблокированном покажет обычное heads-up уведомление.
-            val alarmIntent = Intent(context, AlarmActivity::class.java)
-                .setData(Uri.parse("pill://fullscreen/" + doseId))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                .putExtra(EXTRA_DOSE_ID, doseId)
-                .putExtra(AlarmActivity.EXTRA_TITLE, title)
-                .putExtra(AlarmActivity.EXTRA_TEXT, fullText)
-            val fsi = PendingIntent.getActivity(
-                context,
-                doseId.toInt(),
-                alarmIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            builder.setFullScreenIntent(fsi, true)
-            // На разблокированном экране система full-screen intent не открывает (только heads-up).
-            // Если пользователь дал «показ поверх других приложений» — открываем экран сами.
-            val pm = context.getSystemService(PowerManager::class.java)
-            val km = context.getSystemService(KeyguardManager::class.java)
-            val unlocked = pm?.isInteractive == true && km?.isKeyguardLocked == false
-            if (unlocked && android.provider.Settings.canDrawOverlays(context)) {
-                try {
-                    context.startActivity(alarmIntent)
-                } catch (_: Exception) {
-                    // Оболочка запретила — остаётся обычное уведомление.
-                }
-            }
+            val alarmIntent = alarmIntent(context, doseId, longArrayOf(doseId), title, fullText, attempt)
+            builder.setFullScreenIntent(activityIntent(context, doseId, alarmIntent), true)
+            launchIfUnlocked(context, alarmIntent)
         }
 
         notifySafely(context, doseId.toInt(), builder)
+    }
+
+    /** Текст с номером повтора; в приватном режиме текста нет — пустой первой строки быть не должно. */
+    private fun withAttempt(text: String, attempt: Int): String =
+        listOfNotNull(text.takeIf { it.isNotBlank() }, if (attempt > 0) Lang.s.reminderN(attempt + 1) else null)
+            .joinToString("\n")
+
+    private fun alarmIntent(context: Context, id: Long, ids: LongArray, title: String, text: String, attempt: Int): Intent =
+        Intent(context, AlarmActivity::class.java)
+            .setData(Uri.parse("pill://fullscreen/" + id))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(EXTRA_DOSE_ID, id)
+            // Все приёмы группы: большая кнопка «Выпито» отмечает их всех, а не только старшего.
+            .putExtra(ActionReceiver.EXTRA_DOSE_IDS, ids)
+            .putExtra(AlarmActivity.EXTRA_TITLE, title)
+            .putExtra(AlarmActivity.EXTRA_TEXT, text)
+            .putExtra(AlarmActivity.EXTRA_ATTEMPT, attempt)
+
+    private fun activityIntent(context: Context, id: Long, intent: Intent): PendingIntent =
+        PendingIntent.getActivity(context, id.toInt(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+    /**
+     * Со заблокированным/погасшим экраном система откроет AlarmActivity во весь экран сама,
+     * при разблокированном покажет только heads-up. Если пользователь дал «показ поверх других
+     * приложений» — открываем экран сами; и для одного приёма, и для группы.
+     */
+    private fun launchIfUnlocked(context: Context, alarmIntent: Intent) {
+        val pm = context.getSystemService(PowerManager::class.java)
+        val km = context.getSystemService(KeyguardManager::class.java)
+        val unlocked = pm?.isInteractive == true && km?.isKeyguardLocked == false
+        if (unlocked && android.provider.Settings.canDrawOverlays(context)) {
+            try {
+                context.startActivity(alarmIntent)
+            } catch (_: Exception) {
+                // Оболочка запретила — остаётся обычное уведомление.
+            }
+        }
     }
 
     /** Одно уведомление на несколько приёмов, назначенных в одну минуту. */
@@ -184,7 +205,7 @@ object Notifications {
     ) {
         val leaderId = doses.first().id
         val ids = doses.map { it.id }.toLongArray()
-        val fullText = if (attempt > 0) text + "\n" + Lang.s.reminderN(attempt + 1) else text
+        val fullText = withAttempt(text, attempt)
 
         val takeAll = PendingIntent.getBroadcast(
             context,
@@ -192,6 +213,16 @@ object Notifications {
             Intent(context, ActionReceiver::class.java)
                 .setAction(ActionReceiver.ACTION_TAKE_GROUP)
                 .setData(Uri.parse("pill://group/" + leaderId))
+                .putExtra(ActionReceiver.EXTRA_DOSE_IDS, ids),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        // «Пропустить все»: иначе приём, который решили не пить, можно было только оставить звонить.
+        val skipAll = PendingIntent.getBroadcast(
+            context,
+            leaderId.toInt(),
+            Intent(context, ActionReceiver::class.java)
+                .setAction(ActionReceiver.ACTION_SKIP_GROUP)
+                .setData(Uri.parse("pill://groupskip/" + leaderId))
                 .putExtra(ActionReceiver.EXTRA_DOSE_IDS, ids),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -218,24 +249,13 @@ object Notifications {
                 ),
             )
             .addAction(R.drawable.ic_pill, Lang.s.takeAllAction, takeAll)
+            .addAction(R.drawable.ic_pill, Lang.s.skipAllAction, skipAll)
             .addAction(R.drawable.ic_pill, Lang.s.snoozeAction(snoozeMin), action(context, leaderId, ActionReceiver.ACTION_SNOOZE, "snooze"))
 
         if (fullScreen) {
-            val alarmIntent = Intent(context, AlarmActivity::class.java)
-                .setData(Uri.parse("pill://fullscreen/" + leaderId))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                .putExtra(EXTRA_DOSE_ID, leaderId)
-                .putExtra(AlarmActivity.EXTRA_TITLE, title)
-                .putExtra(AlarmActivity.EXTRA_TEXT, fullText)
-            builder.setFullScreenIntent(
-                PendingIntent.getActivity(
-                    context,
-                    leaderId.toInt(),
-                    alarmIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                ),
-                true,
-            )
+            val alarmIntent = alarmIntent(context, leaderId, ids, title, fullText, attempt)
+            builder.setFullScreenIntent(activityIntent(context, leaderId, alarmIntent), true)
+            launchIfUnlocked(context, alarmIntent)
         }
         notifySafely(context, leaderId.toInt(), builder)
     }
@@ -277,13 +297,13 @@ object Notifications {
         notifySafely(context, (820_000 + trackerId).toInt(), builder)
     }
 
-    fun showLowStock(context: Context, medId: Long, name: String, left: Double) {
+    fun showLowStock(context: Context, medId: Long, name: String, left: Double, form: String) {
         val s = Lang.s
-        val leftText = if (left % 1.0 == 0.0) left.toInt().toString() else left.toString()
+        // Остаток словами по форме выпуска («4 таблетки», «12 капель»), как везде в приложении.
         val builder = NotificationCompat.Builder(context, defaultChannelId(context))
             .setSmallIcon(R.drawable.ic_pill)
             .setContentTitle(s.lowStockTitle)
-            .setContentText(s.lowStockBody(name, leftText))
+            .setContentText(s.lowStockBody(name, s.pills(left, form)))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(

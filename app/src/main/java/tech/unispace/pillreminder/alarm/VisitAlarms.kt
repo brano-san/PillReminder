@@ -44,24 +44,35 @@ object VisitAlarms {
         val now = System.currentTimeMillis()
         val settings = Settings(context)
         val enabled = settings.visitOffsetsMinutes
-        // Отменяем всё, что могло быть поставлено раньше, включая уже убранные смещения.
-        val toCancel = VISIT_OFFSET_PRESETS.toSet() + settings.visitOffsetsEver + enabled
+        // Отменяем всё, что могло быть поставлено раньше, включая уже убранные смещения и запасное (0).
+        val toCancel = VISIT_OFFSET_PRESETS.toSet() + settings.visitOffsetsEver + enabled + SOON_OFFSET
+
+        fun set(at: Long, pi: PendingIntent) {
+            try {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            } catch (_: SecurityException) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            }
+        }
 
         for (visit in db.visitDao().getAll()) {
             for (offset in toCancel) alarmManager.cancel(intentFor(context, visit.id, offset))
+            var scheduled = false
             for (offset in enabled) {
                 val at = visit.atMillis - offset * 60_000L
                 if (at > now) {
-                    val pi = intentFor(context, visit.id, offset)
-                    try {
-                        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-                    } catch (_: SecurityException) {
-                        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-                    }
+                    set(at, intentFor(context, visit.id, offset))
+                    scheduled = true
                 }
             }
+            // Визит ближе всех включённых смещений (записали «через два часа») — одно напоминание через
+            // минуту вместо тишины: пользователь видит «напоминания включены» и ждёт хоть одно.
+            if (!scheduled && visit.atMillis > now) set(now + 60_000L, intentFor(context, visit.id, SOON_OFFSET))
         }
     }
+
+    /** Смещение запасного напоминания «визит уже скоро»; 0 не пересекается с пресетами. */
+    private const val SOON_OFFSET = 0
 }
 
 class VisitReceiver : BroadcastReceiver() {

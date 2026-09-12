@@ -5,6 +5,10 @@ package tech.unispace.pillreminder.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import tech.unispace.pillreminder.data.MED_FORMS
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -75,6 +79,11 @@ fun StatsScreen(
     onSelectDay: (Long) -> Unit,
     onMonthShift: (Long) -> Unit,
     onUndo: (Long) -> Unit,
+    /** Отметить приём прошлого дня задним числом: время — плановое. */
+    onTakeAt: (doseId: Long, at: Long) -> Unit,
+    onSkip: (Long) -> Unit,
+    /** Ошибочная отметка «Еда» убирается долгим нажатием по строке журнала. */
+    onDeleteMeal: (Long) -> Unit,
     contentPadding: PaddingValues,
 ) {
     val s = Lang.s
@@ -94,7 +103,7 @@ fun StatsScreen(
         }
         HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
             when (page) {
-                0 -> JournalTab(adherence, journal, onSelectDay, onUndo, contentPadding)
+                0 -> JournalTab(adherence, journal, onSelectDay, onUndo, onTakeAt, onSkip, onDeleteMeal, contentPadding)
                 else -> HeatmapTab(
                     heatmap,
                     onMonthShift,
@@ -115,6 +124,9 @@ private fun JournalTab(
     state: JournalState,
     onSelectDay: (Long) -> Unit,
     onUndo: (Long) -> Unit,
+    onTakeAt: (Long, Long) -> Unit,
+    onSkip: (Long) -> Unit,
+    onDeleteMeal: (Long) -> Unit,
     contentPadding: PaddingValues,
 ) {
     // Фильтры журнала: приёмы, еда и сон можно скрывать по отдельности.
@@ -195,8 +207,15 @@ private fun JournalTab(
             // Всё вперемешку, но по времени: видно, что за чем шло в этот день.
             items(events, key = { it.key }) { event ->
                 when (event) {
-                    is JournalEvent.Intake -> DoseRow(event.dose, onUndo)
-                    is JournalEvent.Mark -> MarkRow(event)
+                    is JournalEvent.Intake -> DoseRow(
+                        dose = event.dose,
+                        form = state.formById[event.dose.medId] ?: MED_FORMS.first(),
+                        pastDay = state.day < today(),
+                        onUndo = onUndo,
+                        onTakeAt = onTakeAt,
+                        onSkip = onSkip,
+                    )
+                    is JournalEvent.Mark -> MarkRow(event, onDeleteMeal)
                 }
             }
         }
@@ -247,6 +266,12 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
         IconButton(onClick = { onSelectDay(selected + 7) }) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = Lang.s.weekNext)
         }
+        // «К сегодня» — как на календаре: после пары недель назад стрелками возвращаться долго.
+        if (selected != todayDay) {
+            IconButton(onClick = { onSelectDay(todayDay) }) {
+                Icon(Icons.Default.Today, contentDescription = Lang.s.toToday)
+            }
+        }
     }
 }
 
@@ -258,16 +283,22 @@ private sealed class JournalEvent(val at: Long, val key: String) {
     class Mark(at: Long, val kind: MarkKind) : JournalEvent(at, "mark-" + kind.name + "-" + at)
 }
 
-/** Отметка дня строкой: иконка, что случилось и во сколько. */
+/** Отметка дня строкой: иконка, что случилось и во сколько. Еду можно убрать долгим нажатием. */
 @Composable
-private fun MarkRow(event: JournalEvent.Mark) {
+private fun MarkRow(event: JournalEvent.Mark, onDeleteMeal: (Long) -> Unit) {
     val s = Lang.s
     val (icon, label) = when (event.kind) {
         MarkKind.WAKE -> Icons.Default.WbSunny to s.eventWokeUp
         MarkKind.BED -> Icons.Default.Bedtime to s.eventBed
         MarkKind.MEAL -> Icons.Default.Restaurant to s.eventMeal
     }
-    Card(Modifier.fillMaxWidth()) {
+    // Ошибочная «Еда» открывает приём «после еды» — её должно быть можно убрать.
+    var confirm by remember { mutableStateOf(false) }
+    if (confirm) {
+        ConfirmDeleteDialog(title = s.eventMeal, onConfirm = { onDeleteMeal(event.at) }, onDismiss = { confirm = false })
+    }
+    val clickable = if (event.kind == MarkKind.MEAL) Modifier.combinedClickable(onClick = {}, onLongClick = { confirm = true }) else Modifier
+    Card(Modifier.fillMaxWidth().then(clickable)) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(12.dp))
@@ -292,8 +323,19 @@ private fun FilterMenuItem(label: String, checked: Boolean, onChange: (Boolean) 
     )
 }
 
+/**
+ * Приём в журнале. У прошлого дня ожидающий приём (например, после «Вернуть») можно отметить
+ * задним числом — иначе он навсегда жёлтый, а «Вернуть» ведёт в тупик.
+ */
 @Composable
-private fun DoseRow(dose: Dose, onUndo: (Long) -> Unit) {
+private fun DoseRow(
+    dose: Dose,
+    form: String,
+    pastDay: Boolean,
+    onUndo: (Long) -> Unit,
+    onTakeAt: (Long, Long) -> Unit,
+    onSkip: (Long) -> Unit,
+) {
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -316,13 +358,17 @@ private fun DoseRow(dose: Dose, onUndo: (Long) -> Unit) {
                     DoseStatus.PENDING -> Lang.s.plannedAt(formatClock(dose.plannedAt))
                 }
                 Text(
-                    label + " · " + Lang.s.planLabel(formatClock(dose.plannedAt)) + " · " + formatAmount(dose.amount),
+                    // Слово «таблетки/капли» — по форме выпуска, как на карточке и в шторке.
+                    label + " · " + Lang.s.planLabel(formatClock(dose.plannedAt)) + " · " + formatAmount(dose.amount, form),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (dose.status != DoseStatus.PENDING) {
                 TextButton(onClick = { onUndo(dose.id) }) { Text(Lang.s.undo, maxLines = 1, softWrap = false) }
+            } else if (pastDay) {
+                TextButton(onClick = { onSkip(dose.id) }) { Text(Lang.s.skip, maxLines = 1, softWrap = false) }
+                TextButton(onClick = { onTakeAt(dose.id, dose.plannedAt) }) { Text(Lang.s.took, maxLines = 1, softWrap = false) }
             }
         }
     }
@@ -343,7 +389,11 @@ private fun HeatmapTab(
     val firstCellOffset = start.dayOfWeek.value - 1
     val todayDay = today()
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Прокрутка: в ландшафте и на коротких экранах нижние ряды и легенда иначе обрезаются.
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onMonthShift(-1) }) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = Lang.s.weekPrev)
