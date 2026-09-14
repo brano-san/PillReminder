@@ -26,6 +26,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -130,9 +134,10 @@ private val TL_GREEN = Color(0xFF4CAF50)
 private val TL_AMBER = Color(0xFFE0A100)
 private val TL_RED = Color(0xFFE53935)
 
-private val NODE_WIDTH = 64.dp
+// Узкие узлы и короткие соединители: на экран должно влезать больше узлов, длинная подпись промежутка всё равно растянет линию.
+private val NODE_WIDTH = 58.dp
 private val NODE_SIZE = 34.dp
-private val CONNECTOR_MIN_WIDTH = 44.dp
+private val CONNECTOR_MIN_WIDTH = 24.dp
 
 /**
  * Схема дня цепочкой: `| Подъём — 30 мин — 💊 — 1 ч — 🍴 — сразу — 💊 …`.
@@ -142,16 +147,27 @@ private val CONNECTOR_MIN_WIDTH = 44.dp
  * Тап по таблетке — [onPillTap] с её id: главный экран подсвечивает карточку.
  */
 @Composable
-fun DayTimeline(nodes: List<TimelineNode>, now: Long, modifier: Modifier = Modifier, onPillTap: (Long) -> Unit = {}) {
+fun DayTimeline(
+    nodes: List<TimelineNode>,
+    now: Long,
+    modifier: Modifier = Modifier,
+    /** Прокручивать ряд к «сейчас»; для прошедшего дня в календаре — false, ряд стоит на начале. */
+    autoScroll: Boolean = true,
+    onPillTap: (Long) -> Unit = {},
+) {
     val scroll = rememberScrollState()
     val density = LocalDensity.current
     // Высота строки над узлами — от шрифта, а не 16 dp: при крупном системном шрифте подпись промежутка не режется,
     // а линия по-прежнему проходит через центры кружков.
     val header: Dp = with(density) { MaterialTheme.typography.labelSmall.lineHeight.toDp() }
     val firstFuture = nodes.indexOfFirst { it.at > now }.let { if (it < 0) nodes.lastIndex else it }
-    LaunchedEffect(firstFuture, nodes.size) {
-        val target = with(density) { ((NODE_WIDTH + CONNECTOR_MIN_WIDTH) * firstFuture - 100.dp).roundToPx() }
-        scroll.animateScrollTo(target.coerceAtLeast(0))
+    // Первый показ — сразу на месте, без анимации от начала: она читалась как пролаг после «Подъёма».
+    var shownOnce by remember { mutableStateOf(false) }
+    LaunchedEffect(firstFuture, nodes.size, autoScroll) {
+        if (!autoScroll) return@LaunchedEffect
+        val target = with(density) { ((NODE_WIDTH + CONNECTOR_MIN_WIDTH) * firstFuture - 100.dp).roundToPx() }.coerceAtLeast(0)
+        if (shownOnce) scroll.animateScrollTo(target) else scroll.scrollTo(target)
+        shownOnce = true
     }
     Row(modifier.horizontalScroll(scroll), verticalAlignment = Alignment.Top) {
         nodes.forEachIndexed { i, node ->

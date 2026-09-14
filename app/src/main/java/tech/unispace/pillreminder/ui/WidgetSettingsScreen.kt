@@ -133,46 +133,47 @@ fun WidgetSettingsScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Text(s.widgetStyleBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
-                // Подписи над половинами: без них подложка читалась как «фон становится белее», а не как образцы обоев.
-                Row(Modifier.fillMaxWidth()) {
-                    Text(s.widgetPreviewLight, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
-                    Text(s.widgetPreviewDark, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
-                }
-                Spacer(Modifier.height(4.dp))
-                // Предпросмотр на двухцветной подложке: светлая и тёмная половины показывают читаемость
-                // на любых обоях, а не на цвете темы приложения. Состав — как у широкого виджета: строки, подстрока, кнопка.
+                // Предпросмотр на двухцветной подложке: светлая и тёмная половины — образцы обоев, а не цвет темы.
+                // Подписи стоят внутри половин, поля широкие: узкая светлая кайма снаружи виджета читалась
+                // как оторванная «белая дуга». Состав — как у широкого виджета: строки, подстрока, кнопка.
                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))) {
                     Row(Modifier.matchParentSize()) {
-                        Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE6E6E6)))
+                        Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFDCDCDC)))
                         Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFF2B2B2B)))
                     }
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                            .background(Color(widgetColor).copy(alpha = widgetOpacity / 100f), RoundedCornerShape(14.dp))
-                            .padding(12.dp),
-                    ) {
-                        Text(s.widgetTitle, style = MaterialTheme.typography.labelSmall, color = secondaryText)
-                        if (sample) {
-                            Text(s.widgetPreviewLine1, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1)
-                            Text(s.mealAfterNow, style = MaterialTheme.typography.labelSmall, color = secondaryText, maxLines = 1)
-                            Text(s.widgetPreviewLine2, color = primaryText, maxLines = 1)
-                        } else {
-                            lines.forEachIndexed { i, line ->
-                                Text(line.main, fontWeight = if (i == 0) FontWeight.SemiBold else FontWeight.Normal, color = primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                line.sub?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                            }
+                    Column(Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
+                            Text(s.widgetPreviewLight, style = MaterialTheme.typography.labelSmall, color = Color(0xFF555555), textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
+                            Text(s.widgetPreviewDark, style = MaterialTheme.typography.labelSmall, color = Color(0xFFBBBBBB), textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
                         }
-                        Spacer(Modifier.height(8.dp))
-                        Box(
+                        Column(
                             Modifier
                                 .fillMaxWidth()
-                                .background(if (lightText) Color(0x33FFFFFF) else Color(0x1A000000), RoundedCornerShape(12.dp))
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
+                                .padding(start = 14.dp, end = 14.dp, bottom = 14.dp)
+                                .background(Color(widgetColor).copy(alpha = widgetOpacity / 100f), RoundedCornerShape(14.dp))
+                                .padding(12.dp),
                         ) {
-                            Text(s.widgetTake, style = MaterialTheme.typography.labelLarge, color = primaryText, maxLines = 1, softWrap = false)
+                            Text(s.widgetTitle, style = MaterialTheme.typography.labelSmall, color = secondaryText)
+                            if (sample) {
+                                Text(s.widgetPreviewLine1, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1)
+                                Text(s.mealAfterNow, style = MaterialTheme.typography.labelSmall, color = secondaryText, maxLines = 1)
+                                Text(s.widgetPreviewLine2, color = primaryText, maxLines = 1)
+                            } else {
+                                lines.forEachIndexed { i, line ->
+                                    Text(line.main, fontWeight = if (i == 0) FontWeight.SemiBold else FontWeight.Normal, color = primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    line.sub?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .background(if (lightText) Color(0x33FFFFFF) else Color(0x1A000000), RoundedCornerShape(12.dp))
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(s.widgetTake, style = MaterialTheme.typography.labelLarge, color = primaryText, maxLines = 1, softWrap = false)
+                            }
                         }
                     }
                 }

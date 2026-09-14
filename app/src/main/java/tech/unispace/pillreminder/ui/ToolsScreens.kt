@@ -106,8 +106,8 @@ private fun ToolScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -268,7 +268,9 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
         if (uri != null) {
             scope.launch {
                 try {
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(report.toByteArray(Charsets.UTF_8)) }
+                    // В файл — без пустых разделов: печатный лист не должен быть замусорен графами «нет данных».
+                    val text = vm.buildReport(days, sections, hideEmpty = true)
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
                     snackbars.showSnackbar(s.exportDone)
                 } catch (_: Exception) {
                     snackbars.showSnackbar(s.exportError)
@@ -280,7 +282,7 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
         if (uri != null) {
             scope.launch {
                 try {
-                    val bytes = Report.toPdf(report)
+                    val bytes = Report.toPdf(vm.buildReport(days, sections, hideEmpty = true))
                     context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                     snackbars.showSnackbar(s.exportDone)
                 } catch (_: Exception) {
@@ -380,14 +382,18 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
         }
         FilledTonalButton(
             onClick = {
-                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report)
-                context.startActivity(Intent.createChooser(send, s.reportShare))
+                scope.launch {
+                    val text = vm.buildReport(days, sections, hideEmpty = true)
+                    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                    context.startActivity(Intent.createChooser(send, s.reportShare))
+                }
             },
             modifier = Modifier.fillMaxWidth(),
         ) { Text(s.reportShare, maxLines = 1, softWrap = false) }
 
         }
         ToolSection(s.reportPreviewTitle) {
+            Text(s.reportEmptyHidden, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(report, style = MaterialTheme.typography.bodySmall)
         }
     }

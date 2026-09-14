@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -422,9 +423,16 @@ private fun RowScope.TabItem(nav: NavHostController, current: String?, route: St
         selected = current == route,
         onClick = { navigateTab(nav, route) },
         icon = { Icon(icon, contentDescription = null) },
-        // Одна строка без переносов: «Настройки» не должно ломаться на «и».
+        // Одна строка без переносов и многоточия: на узком экране «Настройки» в 11 sp с трекингом
+        // обрезалось до «Настрой…» — подпись 10 sp без разрядки помещается в пятую часть ширины.
         label = {
-            Text(label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+            Text(
+                label,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Visible,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, letterSpacing = 0.sp),
+            )
         },
     )
 }

@@ -25,6 +25,9 @@ val MED_FORMS = listOf("Таблетка", "Инъекция", "Раствор",
  */
 const val MEAL_NOW = 1
 
+/** «Во время еды» в [Medication.afterMealMinutes]: ждёт кнопку «Еда», как «после еды», но словами — «во время еды». */
+const val MEAL_WITH = 2
+
 /**
  * Таблетка и правило её приёма.
  *
@@ -91,7 +94,28 @@ data class Medication(
      * Подсказка человеку (виден на карточке, в шторке и на виджете), на расписание не влияет.
      */
     val mealCalories: Int = 0,
+    /**
+     * Дни недели приёма: CSV номеров ISO (1 — понедельник … 7 — воскресенье), «1,3,5». Пусто — по правилу
+     * [everyNDays]. Метотрексат «пн, ср, пт» интервалом не описать, поэтому это отдельный режим.
+     */
+    val weekdays: String = "",
 )
+
+/** Дни недели приёма (ISO 1..7), отсортированные; пусто — правило «раз в N дней». */
+fun Medication.weekdaysList(): List<Int> =
+    weekdays.split(',').mapNotNull { it.trim().toIntOrNull() }.filter { it in 1..7 }.distinct().sorted()
+
+/**
+ * Принимается ли таблетка в этот день: по дням недели, если они заданы, иначе «раз в N дней» от начала курса.
+ * Единственное определение — для планировщика, карточки и отчёта; чистая функция, с тестом.
+ */
+fun Medication.isDueOn(day: Long): Boolean {
+    val days = weekdaysList()
+    if (days.isNotEmpty()) return java.time.LocalDate.ofEpochDay(day).dayOfWeek.value in days
+    if (everyNDays <= 1) return true
+    val n = everyNDays.toLong()
+    return ((day - cycleStartEpochDay) % n + n) % n == 0L
+}
 
 /** Список id таблеток, с которыми этот приём нужно разносить. */
 fun Medication.apartFromList(): List<Long> =

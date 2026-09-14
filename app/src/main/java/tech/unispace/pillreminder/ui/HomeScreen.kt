@@ -114,6 +114,7 @@ import tech.unispace.pillreminder.data.byClock
 import tech.unispace.pillreminder.data.epochDayOf
 import tech.unispace.pillreminder.data.fixedTimesList
 import tech.unispace.pillreminder.data.today
+import tech.unispace.pillreminder.data.weekdaysList
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -222,6 +223,16 @@ fun HomeScreen(
             title = { Text(row.med.name) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Без строки и кнопки «Изменить» у таблетки без приёма и без соседей тело было пустым:
+                    // заголовок, а под ним сразу кнопки диалога.
+                    Text(s.longPressBody, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(
+                        onClick = {
+                            actionTarget = null
+                            onEdit(row.med.id)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(s.edit, maxLines = 1, softWrap = false) }
                     if (next != null && !row.med.asNeeded) {
                         OutlinedButton(
                             onClick = {
@@ -575,7 +586,7 @@ private fun ReorderDialog(meds: List<Medication>, onDone: (List<Long>) -> Unit, 
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Icon(formIcon(med.form), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text(med.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        MarqueeText(med.name, modifier = Modifier.weight(1f))
                         IconButton(
                             enabled = i > 0,
                             onClick = { order = order.toMutableList().also { it.add(i - 1, it.removeAt(i)) } },
@@ -797,7 +808,12 @@ private fun EmptyHint() {
 fun stockRunsOut(med: Medication): Long? {
     val stock = med.stockCount ?: return null
     if (med.asNeeded || stock <= 0.0) return null
-    val perDay = med.dosesPerIntake * med.timesPerDay / med.everyNDays.coerceAtLeast(1)
+    val weekdays = med.weekdaysList()
+    val perDay = if (weekdays.isNotEmpty()) {
+        med.dosesPerIntake * med.timesPerDay * weekdays.size / 7.0
+    } else {
+        med.dosesPerIntake * med.timesPerDay / med.everyNDays.coerceAtLeast(1)
+    }
     if (perDay <= 0.0) return null
     return today() + (stock / perDay).toLong()
 }
@@ -929,7 +945,7 @@ private fun MedCard(
                 when {
                     row.med.asNeeded -> s.asNeededShort
                     row.linkedParentName != null -> s.afterMed(row.linkedParentName, s.duration(row.med.linkedDelayMinutes))
-                    else -> s.schedule(row.med.timesPerDay, row.med.intervalMinutes, row.med.everyNDays)
+                    else -> s.schedule(row.med.timesPerDay, row.med.intervalMinutes, row.med.everyNDays, row.med.weekdaysList())
                 },
             )
         }
@@ -984,13 +1000,11 @@ private fun MedCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(formIcon(row.med.form), contentDescription = s.formName(row.med.form), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(10.dp))
-                // В полном режиме название не делит строку со временем: «Эсциталопрам» не ломается по буквам.
-                Text(
+                // Название в одну строку; длинное едет каруселью, чтобы прочитать целиком.
+                MarqueeText(
                     row.med.name,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
                 if (compact && next != null && showTime) {
@@ -1094,7 +1108,7 @@ private fun MedCard(
                             Text(s.takeNow, maxLines = 1, softWrap = false)
                         }
                     }
-                    !row.dueToday -> StatusLine(s.notTodayEveryN(row.med.everyNDays))
+                    !row.dueToday -> StatusLine(s.notTodayPeriod(s.periodWords(row.med.everyNDays, row.med.weekdaysList())))
                     !awake -> StatusLine(s.waitingWake)
                     next == null && row.takenToday == 0 && row.skippedToday == 0 && row.linkedParentName != null -> StatusLine(s.waitsFor(row.linkedParentName))
                     // Закрытый набор с пропуском — не «всё выпито»: пишем честно, сколько выпито.

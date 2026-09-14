@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import tech.unispace.pillreminder.data.MEAL_NOW
+import tech.unispace.pillreminder.data.MEAL_WITH
 
 /** Единый текст связи приёма с едой: «сразу» словами, а не «1 мин». */
 class MealRelationTest {
@@ -12,6 +13,12 @@ class MealRelationTest {
     fun immediatelyUsesWordsNotOneMinute() {
         assertEquals("сразу после еды", RU.mealRelation(MEAL_NOW, 0))
         assertEquals("right after a meal", EN.mealRelation(MEAL_NOW, 0))
+    }
+
+    @Test
+    fun withMealHasItsOwnWords() {
+        assertEquals("во время еды", RU.mealRelation(MEAL_WITH, 0))
+        assertEquals("with a meal", EN.mealRelation(MEAL_WITH, 0))
     }
 
     @Test

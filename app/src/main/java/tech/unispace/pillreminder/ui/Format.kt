@@ -24,8 +24,4 @@ fun formatDay(epochDay: Long): String {
 /** «через 2 ч 15 мин» / "in 2 h 15 min". */
 fun formatCountdown(deltaMs: Long): String = Lang.s.countdown(deltaMs)
 
-/** «3 раза в день, каждые 4 ч» / "3 times a day, every 4 h". */
-fun describeSchedule(timesPerDay: Int, intervalMinutes: Int, everyNDays: Int): String =
-    Lang.s.schedule(timesPerDay, intervalMinutes, everyNDays)
-
 fun formatDuration(minutes: Int): String = Lang.s.duration(minutes)

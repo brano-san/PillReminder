@@ -62,6 +62,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -155,8 +160,8 @@ fun SettingsMenuScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(contentPadding)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -356,8 +361,8 @@ internal fun SettingsSubScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -370,6 +375,9 @@ internal fun SettingsSubScreen(
 
 // ---------- Повторы, отложить, тихие часы, напоминание проснуться ----------
 
+/** Пресеты интервала повторов, минуты; остальное — за чипом «другое…». */
+private val REPEAT_PRESETS = listOf(1, 3, 5, 10, 15)
+
 @Composable
 fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     val s = Lang.s
@@ -379,6 +387,8 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     var repeatInterval by remember { mutableIntStateOf(settings.repeatIntervalMinutes) }
     var repeatIntervalText by remember { mutableStateOf(settings.repeatIntervalMinutes.toString()) }
     var repeatCount by remember { mutableIntStateOf(settings.repeatCount) }
+    // Поле «свой интервал» — только за чипом «другое…»: под выбранными «3 мин» висело поле с «3».
+    var customRepeat by remember { mutableStateOf(settings.repeatIntervalMinutes !in REPEAT_PRESETS) }
     var wakeRemind by remember { mutableStateOf(settings.wakeReminderEnabled) }
     var wakeRemindAt by remember { mutableIntStateOf(settings.wakeReminderMinutes) }
     var showWakePicker by remember { mutableStateOf(false) }
@@ -407,11 +417,12 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                     Spacer(Modifier.height(12.dp))
                     Text(s.repeatHowOften, style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(6.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(1, 3, 5, 10, 15).forEach { m ->
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        REPEAT_PRESETS.forEach { m ->
                             FilterChip(
-                                selected = repeatInterval == m,
+                                selected = repeatInterval == m && !customRepeat,
                                 onClick = {
+                                    customRepeat = false
                                     repeatInterval = m
                                     repeatIntervalText = m.toString()
                                     settings.repeatIntervalMinutes = m
@@ -419,7 +430,9 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                                 label = { Text(s.duration(m)) },
                             )
                         }
+                        FilterChip(selected = customRepeat, onClick = { customRepeat = true }, label = { Text(s.otherChip) })
                     }
+                    if (customRepeat) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = repeatIntervalText,
@@ -440,6 +453,7 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                         colors = fieldColors(),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Text(s.repeatHowMany, style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(6.dp))
@@ -573,7 +587,8 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
     var alarmSound by remember { mutableStateOf(settings.alarmSound) }
     var fullScreenAlarm by remember { mutableStateOf(settings.fullScreenAlarm) }
     var refresh by remember { mutableIntStateOf(0) }
-    val fsiAllowed = remember(refresh) { canUseFullScreenIntent(context) }
+    // Тумблер «во весь экран» отправил в системные настройки за разрешением: по возвращении включаем его сами.
+    var fsiPending by remember { mutableStateOf(false) }
     val overlayAllowed = remember(refresh) { Settings.canDrawOverlays(context) }
 
     val snackbars = remember { SnackbarHostState() }
@@ -585,6 +600,22 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
         }
     }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { refresh++ }
+    LaunchedEffect(refresh) {
+        val allowed = canUseFullScreenIntent(context)
+        if (fsiPending) {
+            fsiPending = false
+            if (allowed) {
+                fullScreenAlarm = true
+                settings.fullScreenAlarm = true
+            }
+        }
+        // Разрешения нет (отозвали или включили до этой версии) — тумблер не может быть включён:
+        // иначе он обещает полноэкранный будильник, а придёт обычное уведомление.
+        if (fullScreenAlarm && !allowed) {
+            fullScreenAlarm = false
+            settings.fullScreenAlarm = false
+        }
+    }
 
     var soundUri by remember { mutableStateOf(settings.soundUri) }
     val ringtoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -636,45 +667,21 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                // Отдельное разрешение на полноэкранные уведомления есть только с Android 14 —
-                // на старых версиях строка «разрешено» говорила бы о несуществующем пункте.
-                if (Build.VERSION.SDK_INT >= 34) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (fsiAllowed) Icons.Default.CheckCircle else Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                // Одно действие вместо трёх: без разрешения (Android 14+) тумблер сам открывает системный экран
+                // и включается только когда разрешение выдано. Предупреждение до включения не показываем.
+                SwitchRow(s.fullScreenTitle, s.fullScreenBody, fullScreenAlarm) { on ->
+                    if (on && !canUseFullScreenIntent(context)) {
+                        fsiPending = true
+                        safeLaunch(
+                            launcher,
+                            Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+                                .setData(Uri.parse("package:" + context.packageName)),
+                            context,
                         )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            if (fsiAllowed) s.fsiOk else s.fsPermWarn,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (fsiAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                        )
+                    } else {
+                        fullScreenAlarm = on
+                        settings.fullScreenAlarm = on
                     }
-                    Spacer(Modifier.height(8.dp))
-                }
-                SwitchRow(s.fullScreenTitle, s.fullScreenBody, fullScreenAlarm) {
-                    fullScreenAlarm = it
-                    settings.fullScreenAlarm = it
-                }
-                if (fullScreenAlarm && !fsiAllowed) {
-                    Spacer(Modifier.height(8.dp))
-                    FilledTonalButton(
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= 34) {
-                                safeLaunch(
-                                    launcher,
-                                    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
-                                        .setData(Uri.parse("package:" + context.packageName)),
-                                    context,
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(s.allowFullScreen) }
-                Spacer(Modifier.height(8.dp))
-                    Text(s.fsi14Note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -773,8 +780,6 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     var selected by remember { mutableStateOf(settings.visitOffsetsMinutes) }
     // Свои смещения живут отдельно от галочек: снятая галочка не должна стирать время.
     var custom by remember { mutableStateOf(settings.visitOffsetsCustom) }
-    // Пресеты тоже можно скрыть: кому-то не нужны «за неделю» и «за 3 дня».
-    var hidden by remember { mutableStateOf(settings.visitOffsetsHidden) }
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -785,9 +790,7 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     }
 
     // Пресеты + всё, что пользователь добавлял сам.
-    val options = (VISIT_OFFSET_PRESETS + custom + selected).distinct()
-        .filter { it !in hidden || it in selected }
-        .sortedDescending()
+    val options = (VISIT_OFFSET_PRESETS + custom + selected).distinct().sortedDescending()
 
     SettingsSubScreen(s.visitRemindersTitle, onBack, snackbars) {
         Text(s.visitRemindersBody, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -806,35 +809,26 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                             onCheckedChange = { checked -> apply(if (checked) selected + offset else selected - offset) },
                         )
                         Text(s.visitOffsetLabel(offset), modifier = Modifier.weight(1f))
-                        // Убрать можно любую строку: своё время удаляется совсем, пресет — прячется.
-                        // Снекбар с «Вернуть»: вернуть спрятанный пресет иначе нечем.
-                        IconButton(onClick = {
-                            val wasCustom = offset in custom
-                            val wasSelected = offset in selected
-                            if (wasCustom) {
+                        // Крестик — только у своих сроков: встроенные «за неделю / за день / за 3 часа» отключаются
+                        // галочкой, удалять их незачем. Снекбар с «Вернуть» — на случай промаха.
+                        if (offset !in VISIT_OFFSET_PRESETS) {
+                            IconButton(onClick = {
+                                val wasSelected = offset in selected
                                 custom = custom - offset
                                 settings.visitOffsetsCustom = custom
-                            }
-                            if (offset in VISIT_OFFSET_PRESETS) {
-                                hidden = hidden + offset
-                                settings.visitOffsetsHidden = hidden
-                            }
-                            apply(selected - offset)
-                            scope.launch {
-                                snackbars.currentSnackbarData?.dismiss()
-                                val result = snackbars.showSnackbar(s.visitOffsetHiddenMsg, actionLabel = s.undo)
-                                if (result == SnackbarResult.ActionPerformed) {
-                                    if (wasCustom) {
+                                apply(selected - offset)
+                                scope.launch {
+                                    snackbars.currentSnackbarData?.dismiss()
+                                    val result = snackbars.showSnackbar(s.visitOffsetRemovedMsg, actionLabel = s.undo)
+                                    if (result == SnackbarResult.ActionPerformed) {
                                         custom = custom + offset
                                         settings.visitOffsetsCustom = custom
+                                        if (wasSelected) apply(selected + offset)
                                     }
-                                    hidden = hidden - offset
-                                    settings.visitOffsetsHidden = hidden
-                                    if (wasSelected) apply(selected + offset)
                                 }
+                            }) {
+                                Icon(Icons.Default.Close, contentDescription = s.delete)
                             }
-                        }) {
-                            Icon(Icons.Default.Close, contentDescription = s.delete)
                         }
                     }
                 }
@@ -980,29 +974,65 @@ fun StockSettingsScreen(onBack: () -> Unit) {
     val s = Lang.s
     val context = LocalContext.current
     val settings = remember { AppSettings(context) }
+    var threshold by remember { mutableIntStateOf(settings.lowStockThreshold) }
     var thresholdText by remember { mutableStateOf(settings.lowStockThreshold.toString()) }
     val snackbars = remember { SnackbarHostState() }
+    fun setThreshold(v: Int) {
+        threshold = v.coerceIn(1, 100)
+        thresholdText = threshold.toString()
+        settings.lowStockThreshold = threshold
+    }
 
     SettingsSubScreen(s.stockCard, onBack, snackbars) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text(s.lowStockTitle, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = thresholdText,
-                    onValueChange = { raw ->
-                        val digits = raw.filter { it.isDigit() }.take(3)
-                        thresholdText = digits
-                        digits.toIntOrNull()?.takeIf { it in 1..100 }?.let { settings.lowStockThreshold = it }
-                    },
-                    label = { Text(s.thresholdShort) },
-                    isError = thresholdText.toIntOrNull()?.let { it !in 1..100 } ?: thresholdText.isNotEmpty(),
-                    supportingText = { Text(s.thresholdLabel + " " + s.rangeHint(1, 100) + ".") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    colors = fieldColors(),
+                Spacer(Modifier.height(4.dp))
+                Text(s.thresholdLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(10.dp))
+                // Степпер: число между «−» и «+» вводится и с цифровой клавиатуры; чипы прибавляют.
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    OutlinedIconButton(onClick = { setThreshold(threshold - 1) }, enabled = threshold > 1, modifier = Modifier.size(44.dp)) {
+                        Icon(Icons.Default.Remove, contentDescription = s.stepDown)
+                    }
+                    OutlinedTextField(
+                        value = thresholdText,
+                        onValueChange = { raw ->
+                            val digits = raw.filter { it.isDigit() }.take(3)
+                            thresholdText = digits
+                            digits.toIntOrNull()?.takeIf { it in 1..100 }?.let {
+                                threshold = it
+                                settings.lowStockThreshold = it
+                            }
+                        },
+                        textStyle = MaterialTheme.typography.headlineSmall.copy(textAlign = TextAlign.Center, fontWeight = FontWeight.Bold),
+                        isError = thresholdText.toIntOrNull()?.let { it !in 1..100 } ?: true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        colors = fieldColors(),
+                        modifier = Modifier.width(112.dp).padding(horizontal = 10.dp),
+                    )
+                    OutlinedIconButton(onClick = { setThreshold(threshold + 1) }, enabled = threshold < 100, modifier = Modifier.size(44.dp)) {
+                        Icon(Icons.Default.Add, contentDescription = s.stepUp)
+                    }
+                }
+                Text(
+                    s.thresholdShort + " " + s.rangeHint(1, 100),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    listOf(3, 5, 10, 20).forEach { n ->
+                        AssistChip(onClick = { setThreshold(threshold + n) }, label = { Text("+$n") })
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(s.stockSupport, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

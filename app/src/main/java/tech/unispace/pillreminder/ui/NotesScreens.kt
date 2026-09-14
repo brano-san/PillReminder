@@ -244,13 +244,16 @@ fun SearchField(query: String, onChange: (String) -> Unit) {
 
 /** Фильтр заметок по заголовку, описанию, тексту и тегам. */
 fun filterNotes(notes: List<Note>, query: String): List<Note> {
-    if (query.isBlank()) return notes
-    val q = query.trim().lowercase()
-    return notes.filter {
-        it.title.lowercase().contains(q) || it.description.lowercase().contains(q) ||
-            it.body.lowercase().contains(q) || it.tags.lowercase().contains(q)
+    val words = normalizeSearch(query).split(' ').filter { it.isNotBlank() }
+    if (words.isEmpty()) return notes
+    return notes.filter { n ->
+        val hay = normalizeSearch(listOf(n.title, n.description, n.body, n.tags).joinToString(" "))
+        words.all { it in hay }
     }
 }
+
+fun normalizeSearch(text: String): String =
+    text.lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ").trim()
 
 /** Каталог лекарств — отдельный экран (открывается из настроек и из мастера таблетки). */
 @Composable
@@ -684,7 +687,7 @@ fun LibraryList(
                         UriImage(uri = uri, modifier = Modifier.fillMaxWidth().height(180.dp))
                     }
                     Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
-                        Text(entry.name, fontWeight = FontWeight.SemiBold)
+                        MarqueeText(entry.name, fontWeight = FontWeight.SemiBold)
                         val period = libraryPeriodText(entry, s)
                         if (period.isNotBlank()) {
                             Spacer(Modifier.height(4.dp))
@@ -760,8 +763,8 @@ fun NoteViewScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -908,8 +911,8 @@ fun EditNoteScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -985,7 +988,7 @@ fun EditNoteScreen(
                             FilterChip(
                                 selected = medId == med.id,
                                 onClick = { medId = med.id },
-                                label = { Text(med.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                label = { MarqueeText(med.name) },
                             )
                         }
                     }
@@ -1101,8 +1104,8 @@ fun EditVisitScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1314,8 +1317,8 @@ fun EditLibraryScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

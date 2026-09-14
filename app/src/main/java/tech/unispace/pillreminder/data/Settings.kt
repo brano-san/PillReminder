@@ -107,11 +107,6 @@ class Settings(context: Context) {
             .putString(KEY_SNOOZE_OPTIONS, value.filter { it in 1..720 }.distinct().sorted().joinToString(","))
             .apply()
 
-    /** Пресетные смещения напоминаний о визите, которые пользователь убрал из списка. */
-    var visitOffsetsHidden: Set<Int>
-        get() = prefs.getStringSet(KEY_VISIT_HIDDEN, null)?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
-        set(value) = prefs.edit().putStringSet(KEY_VISIT_HIDDEN, value.map { it.toString() }.toSet()).apply()
-
     /** Момент нажатия «Ложусь спать»; 0 — кнопку не нажимали. */
     var pendingSleepStart: Long
         get() = prefs.getLong(KEY_SLEEP_START, 0L)
@@ -262,7 +257,6 @@ class Settings(context: Context) {
         const val KEY_CHANNEL_VERSION = "channel_version"
         const val KEY_VISIT_OFFSETS = "visit_offsets"
         const val KEY_VISIT_CUSTOM = "visit_offsets_custom"
-        const val KEY_VISIT_HIDDEN = "visit_offsets_hidden"
         const val KEY_CHART_SMOOTH = "chart_smooth"
         const val KEY_APP_LOCK = "app_lock"
         const val KEY_HOME_ACTIONS = "home_actions"

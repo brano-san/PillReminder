@@ -1,5 +1,6 @@
 package tech.unispace.pillreminder.data
 
+import androidx.room.withTransaction
 import android.content.Context
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -82,12 +83,8 @@ class Planner(private val context: Context, private val db: AppDatabase) {
     suspend fun cycleDay(now: Long = System.currentTimeMillis()): Long =
         currentCycle(now)?.dayEpochDay ?: epochDayOf(now)
 
-    /** Принимается ли таблетка в этот день по правилу «N раз в N дней». */
-    fun isDueOn(med: Medication, day: Long): Boolean {
-        if (med.everyNDays <= 1) return true
-        val n = med.everyNDays.toLong()
-        return ((day - med.cycleStartEpochDay) % n + n) % n == 0L
-    }
+    /** Принимается ли таблетка в этот день — дни недели или «раз в N дней» ([Medication.isDueOn]). */
+    fun isDueOn(med: Medication, day: Long): Boolean = med.isDueOn(day)
 
     // ---------- Публичный API: каждая мутация под замком и заканчивается пересборкой будильников ----------
 
@@ -95,7 +92,13 @@ class Planner(private val context: Context, private val db: AppDatabase) {
      * Нажата кнопка «я проснулся»: фиксируем момент и пересобираем весь день заново.
      * Уже отмеченные приёмы не трогаем — сдвигаются только ожидающие.
      */
-    suspend fun wakeUp(now: Long = System.currentTimeMillis()): Long = lock.withLock { wakeUpLocked(now) }
+    // Записи — одной транзакцией: иначе главный экран сначала видит подъём без приёмов (схема дня из одного узла),
+    // а через мгновение — приёмы. Будильники и виджет — после коммита: это медленные IPC, экран не должен их ждать.
+    suspend fun wakeUp(now: Long = System.currentTimeMillis()): Long = lock.withLock {
+        val at = db.withTransaction { wakeUpLocked(now) }
+        rescheduleAlarmsLocked()
+        at
+    }
 
     /** Пересобрать ожидающие приёмы одной таблетки — после добавления или редактирования. */
     suspend fun refreshMedToday(medId: Long) = lock.withLock { refreshMedTodayLocked(medId) }
@@ -323,7 +326,6 @@ class Planner(private val context: Context, private val db: AppDatabase) {
                 .maxByOrNull { it.indexInDay } ?: continue
             planLinkedChildren(anchor, anchor.takenAt ?: anchor.plannedAt)
         }
-        rescheduleAlarmsLocked()
         return now
     }
 

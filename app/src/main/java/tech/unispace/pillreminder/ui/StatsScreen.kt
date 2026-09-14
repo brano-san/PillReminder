@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package tech.unispace.pillreminder.ui
 
@@ -42,6 +42,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EditOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
@@ -106,6 +114,7 @@ fun StatsScreen(
                 0 -> JournalTab(adherence, journal, onSelectDay, onUndo, onTakeAt, onSkip, onDeleteMeal, contentPadding)
                 else -> HeatmapTab(
                     heatmap,
+                    journal,
                     onMonthShift,
                     onSelectDay,
                     goToJournal = { scope.launch { pager.animateScrollToPage(0) } },
@@ -145,24 +154,51 @@ private fun JournalTab(
         }.sortedByDescending { it.at }
     }
 
+    val pastDay = state.day < today()
+    // Правка прошлого дня — намеренно за отдельной кнопкой и подтверждением: история должна оставаться историей.
+    // Сбрасывается при смене дня.
+    var editPast by remember(state.day) { mutableStateOf(false) }
+    var confirmEdit by remember { mutableStateOf(false) }
+    if (confirmEdit) {
+        AlertDialog(
+            onDismissRequest = { confirmEdit = false },
+            title = { Text(Lang.s.editHistoryTitle) },
+            text = { Text(Lang.s.editHistoryBody) },
+            confirmButton = { TextButton(onClick = { confirmEdit = false; editPast = true }) { Text(Lang.s.editHistoryConfirm) } },
+            dismissButton = { TextButton(onClick = { confirmEdit = false }) { Text(Lang.s.cancel) } },
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         WeekStrip(selected = state.day, onSelectDay = onSelectDay)
-        // Фильтры прячем под иконку: лента дня важнее, чем ряд чекбоксов.
-        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp), contentAlignment = Alignment.CenterEnd) {
-            var filterMenu by remember { mutableStateOf(false) }
-            val allShown = showDoses && showMeals && showSleep
-            IconButton(onClick = { filterMenu = true }, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    Icons.Default.FilterList,
-                    contentDescription = Lang.s.journalFilters,
-                    tint = if (allShown) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
+        // Фильтры и правка истории — под иконками справа: лента дня важнее, чем ряд чекбоксов.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            if (pastDay && state.doses.isNotEmpty()) {
+                IconButton(onClick = { if (!editPast) confirmEdit = true else editPast = false }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        if (editPast) Icons.Default.EditOff else Icons.Default.Edit,
+                        contentDescription = Lang.s.editHistoryBtn,
+                        tint = if (editPast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
-            DropdownMenu(expanded = filterMenu, onDismissRequest = { filterMenu = false }) {
-                FilterMenuItem(Lang.s.filterDoses, showDoses) { showDoses = it }
-                FilterMenuItem(Lang.s.filterMeals, showMeals) { showMeals = it }
-                FilterMenuItem(Lang.s.filterSleep, showSleep) { showSleep = it }
+            Box {
+                var filterMenu by remember { mutableStateOf(false) }
+                val allShown = showDoses && showMeals && showSleep
+                IconButton(onClick = { filterMenu = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Default.FilterList,
+                        contentDescription = Lang.s.journalFilters,
+                        tint = if (allShown) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(expanded = filterMenu, onDismissRequest = { filterMenu = false }) {
+                    FilterMenuItem(Lang.s.filterDoses, showDoses) { showDoses = it }
+                    FilterMenuItem(Lang.s.filterMeals, showMeals) { showMeals = it }
+                    FilterMenuItem(Lang.s.filterSleep, showSleep) { showSleep = it }
+                }
             }
         }
         LazyColumn(
@@ -184,7 +220,8 @@ private fun JournalTab(
                             )
                             Text("🔥 " + Lang.s.streakDays(adherence.streak), fontWeight = FontWeight.SemiBold)
                         }
-                    } else {
+                    } else if (!pastDay) {
+                        // «Сегодня отличный день…» — только про сегодня; на прошлом дне фраза была бы неправдой.
                         Text(Lang.s.streakStartToday, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (adherence.perMed.isNotEmpty()) {
@@ -215,7 +252,9 @@ private fun JournalTab(
                     is JournalEvent.Intake -> DoseRow(
                         dose = event.dose,
                         form = state.formById[event.dose.medId] ?: MED_FORMS.first(),
-                        pastDay = state.day < today(),
+                        pastDay = pastDay,
+                        // Кнопки у прошлого дня — только после явного «Изменить историю».
+                        editable = !pastDay || editPast,
                         onUndo = onUndo,
                         onTakeAt = onTakeAt,
                         onSkip = onSkip,
@@ -233,11 +272,13 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
     val weekStart = selectedDate.with(DayOfWeek.MONDAY)
     val todayDay = today()
 
+    // Семь дней делят ширину поровну (weight), подписи не переносятся; стрелки и «к сегодня» — компактные 36 dp,
+    // иначе на узком экране воскресенье сжималось в столбик из букв.
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { onSelectDay(selected - 7) }) {
+        IconButton(onClick = { onSelectDay(selected - 7) }, modifier = Modifier.size(36.dp)) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = Lang.s.weekPrev)
         }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(Modifier.weight(1f)) {
             (0..6).forEach { i ->
                 val date = weekStart.plusDays(i.toLong())
                 val day = date.toEpochDay()
@@ -246,14 +287,19 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 1.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { onSelectDay(day) }
-                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                        .padding(vertical = 4.dp),
                 ) {
                     Text(
                         date.dayOfWeek.getDisplayName(TextStyle.SHORT, Lang.s.locale),
                         style = MaterialTheme.typography.labelSmall,
                         color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
                     )
                     Text(
                         date.dayOfMonth.toString(),
@@ -264,17 +310,19 @@ private fun WeekStrip(selected: Long, onSelectDay: (Long) -> Unit) {
                             isToday -> MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.onSurface
                         },
+                        maxLines = 1,
+                        softWrap = false,
                     )
                 }
             }
         }
-        IconButton(onClick = { onSelectDay(selected + 7) }) {
+        IconButton(onClick = { onSelectDay(selected + 7) }, modifier = Modifier.size(36.dp)) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = Lang.s.weekNext)
         }
         // «К сегодня» — как на календаре: после пары недель назад стрелками возвращаться долго.
         if (selected != todayDay) {
-            IconButton(onClick = { onSelectDay(todayDay) }) {
-                Icon(Icons.Default.Today, contentDescription = Lang.s.toToday)
+            IconButton(onClick = { onSelectDay(todayDay) }, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Today, contentDescription = Lang.s.toToday, modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -337,43 +385,53 @@ private fun DoseRow(
     dose: Dose,
     form: String,
     pastDay: Boolean,
+    /** Показывать кнопки: сегодня — всегда, прошлый день — только после «Изменить историю». */
+    editable: Boolean,
     onUndo: (Long) -> Unit,
     onTakeAt: (Long, Long) -> Unit,
     onSkip: (Long) -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.width(10.dp).height(10.dp).background(
-                    when (dose.status) {
-                        DoseStatus.TAKEN -> Color(0xFF4CAF50)
-                        DoseStatus.SKIPPED -> Color(0xFFE53935)
-                        DoseStatus.PENDING -> Color(0xFFFFC107)
-                    },
-                    CircleShape,
-                ),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(dose.medNameSnapshot.ifBlank { Lang.s.pillFab }, fontWeight = FontWeight.SemiBold)
-                val when0 = dose.takenAt ?: dose.plannedAt
-                val label = when (dose.status) {
-                    DoseStatus.TAKEN -> Lang.s.takenAt(formatClock(when0))
-                    DoseStatus.SKIPPED -> Lang.s.skippedAt(formatClock(when0))
-                    DoseStatus.PENDING -> Lang.s.plannedAt(formatClock(dose.plannedAt))
-                }
-                Text(
-                    // Слово «таблетки/капли» — по форме выпуска, как на карточке и в шторке.
-                    label + " · " + Lang.s.planLabel(formatClock(dose.plannedAt)) + " · " + formatAmount(dose.amount, form),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Текст — во всю ширину, кнопки — своей строкой под ним: в одном ряду с двумя кнопками
+        // «Запланировано на 07:07» рвалось посреди слова.
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.width(10.dp).height(10.dp).background(
+                        when (dose.status) {
+                            DoseStatus.TAKEN -> Color(0xFF4CAF50)
+                            DoseStatus.SKIPPED -> Color(0xFFE53935)
+                            DoseStatus.PENDING -> Color(0xFFFFC107)
+                        },
+                        CircleShape,
+                    ),
                 )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    MarqueeText(dose.medNameSnapshot.ifBlank { Lang.s.pillFab }, fontWeight = FontWeight.SemiBold)
+                    val when0 = dose.takenAt ?: dose.plannedAt
+                    val label = when (dose.status) {
+                        DoseStatus.TAKEN -> Lang.s.takenAt(formatClock(when0))
+                        DoseStatus.SKIPPED -> Lang.s.skippedAt(formatClock(when0))
+                        DoseStatus.PENDING -> Lang.s.plannedAt(formatClock(dose.plannedAt))
+                    }
+                    Text(
+                        // Слово «таблетки/капли» — по форме выпуска, как на карточке и в шторке.
+                        label + " · " + Lang.s.planLabel(formatClock(dose.plannedAt)) + " · " + formatAmount(dose.amount, form),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            if (dose.status != DoseStatus.PENDING) {
-                TextButton(onClick = { onUndo(dose.id) }) { Text(Lang.s.undo, maxLines = 1, softWrap = false) }
-            } else if (pastDay) {
-                TextButton(onClick = { onSkip(dose.id) }) { Text(Lang.s.skip, maxLines = 1, softWrap = false) }
-                TextButton(onClick = { onTakeAt(dose.id, dose.plannedAt) }) { Text(Lang.s.took, maxLines = 1, softWrap = false) }
+            if (editable) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    if (dose.status != DoseStatus.PENDING) {
+                        TextButton(onClick = { onUndo(dose.id) }) { Text(Lang.s.undo, maxLines = 1, softWrap = false) }
+                    } else if (pastDay) {
+                        TextButton(onClick = { onSkip(dose.id) }) { Text(Lang.s.skip, maxLines = 1, softWrap = false) }
+                        TextButton(onClick = { onTakeAt(dose.id, dose.plannedAt) }) { Text(Lang.s.took, maxLines = 1, softWrap = false) }
+                    }
+                }
             }
         }
     }
@@ -384,33 +442,36 @@ private fun DoseRow(
 @Composable
 private fun HeatmapTab(
     state: HeatmapState,
+    /** Выбранный день — общий с журналом: превью под календарём показывает его события. */
+    journal: JournalState,
     onMonthShift: (Long) -> Unit,
     onSelectDay: (Long) -> Unit,
     goToJournal: () -> Unit,
     contentPadding: PaddingValues,
 ) {
+    val s = Lang.s
     val start = state.monthStart
     val daysInMonth = start.lengthOfMonth()
     val firstCellOffset = start.dayOfWeek.value - 1
     val todayDay = today()
 
-    // Прокрутка: в ландшафте и на коротких экранах нижние ряды и легенда иначе обрезаются.
+    // Прокрутка: в ландшафте и на коротких экранах нижние ряды и превью иначе обрезаются.
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onMonthShift(-1) }) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = Lang.s.weekPrev)
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = s.weekPrev)
             }
             Text(
-                Lang.s.monthNames[start.monthValue - 1] + " " + start.year,
+                s.monthNames[start.monthValue - 1] + " " + start.year,
                 style = MaterialTheme.typography.titleMedium,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = { onMonthShift(1) }) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = Lang.s.weekNext)
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = s.weekNext)
             }
             val thisMonth = LocalDate.now().withDayOfMonth(1)
             if (start != thisMonth) {
@@ -418,14 +479,14 @@ private fun HeatmapTab(
                     onMonthShift(ChronoUnit.MONTHS.between(start, thisMonth))
                     onSelectDay(todayDay)
                 }) {
-                    Icon(Icons.Default.Today, contentDescription = Lang.s.toToday)
+                    Icon(Icons.Default.Today, contentDescription = s.toToday)
                 }
             }
         }
         Row(Modifier.fillMaxWidth()) {
             (1..7).forEach { d ->
                 Text(
-                    DayOfWeek.of(d).getDisplayName(TextStyle.SHORT, Lang.s.locale),
+                    DayOfWeek.of(d).getDisplayName(TextStyle.SHORT, s.locale),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -446,11 +507,9 @@ private fun HeatmapTab(
                             heat = state.days[day],
                             isToday = day == todayDay,
                             isFuture = day > todayDay,
+                            isSelected = day == journal.day,
                             modifier = Modifier.weight(1f),
-                            onClick = {
-                                onSelectDay(day)
-                                goToJournal()
-                            },
+                            onClick = { onSelectDay(day) },
                         )
                     } else {
                         Spacer(Modifier.weight(1f).aspectRatio(1f))
@@ -458,11 +517,43 @@ private fun HeatmapTab(
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
-        Text(Lang.s.heatLegend, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(contentPadding.calculateBottomPadding()))
+        Spacer(Modifier.height(2.dp))
+        // Легенда маркерами, а не абзацем: её читают глазами за секунду.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LegendMarker(heatColor(1f), s.legendAll)
+            LegendMarker(heatColor(0.5f), s.legendPartial)
+            LegendMarker(heatColor(0f), s.legendMissed)
+            LegendMarker(Color.Transparent, s.legendToday, border = MaterialTheme.colorScheme.primary)
+            LegendMarker(MaterialTheme.colorScheme.surfaceVariant, s.legendNone)
+        }
+        // Превью выбранного дня — здесь же, без перехода в журнал: «почему 11-е оранжевое» видно сразу.
+        DayPreview(journal, goToJournal)
+        Spacer(Modifier.height(contentPadding.calculateBottomPadding() + 16.dp))
     }
 }
+
+@Composable
+private fun LegendMarker(color: Color, label: String, border: Color? = null) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .size(12.dp)
+                .background(color, RoundedCornerShape(3.dp))
+                .then(if (border != null) Modifier.border(2.dp, border, RoundedCornerShape(3.dp)) else Modifier),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
+    }
+}
+
+/** Доля выпитого → ступень 0…5 (по 20 %): 0 % — красный, 100 % — зелёный. Чистая функция, с тестом. */
+fun heatStep(ratio: Float): Int = (ratio.coerceIn(0f, 1f) * 5).toInt()
+
+/** Цвет клетки по ступени: оттенок от красного (0°) к зелёному (120°) через жёлтый. */
+fun heatColor(ratio: Float): Color = Color.hsv(hue = 24f * heatStep(ratio), saturation = 0.72f, value = 0.78f)
+
+/** Больше стольких приёмов в день точками не показать — вместо них «4/8». */
+private const val HEAT_DOTS_MAX = 6
 
 @Composable
 private fun HeatCell(
@@ -470,40 +561,114 @@ private fun HeatCell(
     heat: DayHeat?,
     isToday: Boolean,
     isFuture: Boolean,
+    isSelected: Boolean,
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
-    val hasData = !isFuture && heat != null && heat.planned > 0
-    val ratio = if (hasData) heat!!.taken.toFloat() / heat.planned else 0f
-    // Сегодня день ещё идёт: пока есть будущие приёмы или выпито не всё, клетка бирюзовая «в процессе»,
-    // а не красная — штрафовать заранее нечего. Зелёной она становится, только когда всё выпито.
-    val inProgress = isToday && !(hasData && ratio >= 1f && heat!!.pending == 0)
-    // Зелёный — день закрыт полностью, оранжевый — были пропуски, красный — не выпито ничего.
+    val scheme = MaterialTheme.colorScheme
+    val decided = heat != null && heat.planned > 0
+    val ratio = if (decided) heat!!.taken.toFloat() / heat.planned else 0f
+    // Заливка — функциональная и для сегодня: утренняя выпита, вечерняя ещё нет — видно по цвету и точкам.
+    // «Сегодня» отличает рамка, а не заливка. Будущие дни — без плашки и полупрозрачные: они ещё не наступили.
     val background = when {
-        inProgress -> MaterialTheme.colorScheme.primaryContainer
-        !hasData -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ratio == 0f -> Color(0xFFE53935).copy(alpha = 0.55f)
-        ratio >= 1f -> Color(0xFF2E7D32).copy(alpha = 0.85f)
-        else -> Color(0xFFEF6C00).copy(alpha = 0.35f + 0.45f * ratio)
+        isFuture -> Color.Transparent
+        decided -> heatColor(ratio)
+        else -> scheme.surfaceVariant.copy(alpha = 0.5f)
     }
     val textColor = when {
-        inProgress -> MaterialTheme.colorScheme.onPrimaryContainer
-        !hasData -> MaterialTheme.colorScheme.onSurface
-        ratio >= 0.5f || ratio == 0f -> Color.White
-        else -> Color(0xFF1B1B1B)
+        isFuture -> scheme.onSurfaceVariant
+        decided -> Color.White
+        else -> scheme.onSurface
     }
-    val cellModifier = modifier
-        .aspectRatio(1f)
-        .background(background, RoundedCornerShape(8.dp))
-        .then(if (isToday) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)) else Modifier)
-        .clickable { onClick() }
+    val border = when {
+        isToday -> Modifier.border(2.5.dp, scheme.primary, RoundedCornerShape(8.dp))
+        isSelected -> Modifier.border(1.5.dp, scheme.onSurface, RoundedCornerShape(8.dp))
+        else -> Modifier
+    }
+    Box(
+        modifier
+            .aspectRatio(1f)
+            .alpha(if (isFuture) 0.4f else 1f)
+            .background(background, RoundedCornerShape(8.dp))
+            .then(border)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                dayOfMonth.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                color = textColor,
+            )
+            val marks = heat?.marks.orEmpty()
+            if (marks.isNotEmpty() && !isFuture) {
+                Spacer(Modifier.height(2.dp))
+                if (marks.size <= HEAT_DOTS_MAX) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        marks.forEach { mark ->
+                            Box(
+                                Modifier.size(4.dp).then(
+                                    when (mark) {
+                                        HeatMark.TAKEN -> Modifier.background(Color.White, CircleShape)
+                                        HeatMark.MISSED -> Modifier.background(Color.White.copy(alpha = 0.35f), CircleShape)
+                                        HeatMark.PENDING -> Modifier.border(1.dp, if (decided) Color.White else scheme.onSurfaceVariant, CircleShape)
+                                    },
+                                ),
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        "" + marks.count { it == HeatMark.TAKEN } + "/" + marks.size,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+        }
+    }
+}
 
-    Box(cellModifier, contentAlignment = Alignment.Center) {
-        Text(
-            dayOfMonth.toString(),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-            color = textColor,
+/** Компактный список событий выбранного дня под календарём: приёмы, подъём, еда, сон — читать, не править. */
+/**
+ * Превью выбранного дня под календарём — та же схема дня, что на главном экране (`DayTimeline`),
+ * а не список строк: один и тот же день должен выглядеть одинаково везде. Будущий день без
+ * событий не показывается вовсе — «приёмов не было» про завтра звучало нелепо.
+ */
+@Composable
+private fun DayPreview(journal: JournalState, goToJournal: () -> Unit) {
+    val s = Lang.s
+    val now = System.currentTimeMillis()
+    val nodes = remember(journal, now / 60_000) {
+        buildTimelineNodes(
+            wakeAt = journal.wakeAt,
+            bedAt = journal.bedAt,
+            doses = journal.doses,
+            formById = journal.formById,
+            meals = journal.meals,
+            now = now,
+            doseInfoById = journal.doseInfoById,
         )
+    }
+    val isToday = journal.day == today()
+    if (nodes.isEmpty() && journal.day > today()) return
+    Card(Modifier.fillMaxWidth()) {
+        // Кнопка «В журнал» ростом 48 dp раздувала шапку: отступ сверху казался больше боковых. Кнопка ниже, отступ меньше.
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(formatDay(journal.day), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                TextButton(onClick = goToJournal, contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp)) {
+                    Text(s.openJournalBtn, maxLines = 1, softWrap = false)
+                }
+            }
+            if (nodes.isEmpty()) {
+                Text(s.noIntakes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                DayTimeline(nodes, now, Modifier.fillMaxWidth(), autoScroll = isToday)
+            }
+        }
     }
 }

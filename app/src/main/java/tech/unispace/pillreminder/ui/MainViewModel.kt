@@ -142,10 +142,27 @@ data class JournalState(
     val meals: List<Long> = emptyList(),
     /** Форма выпуска по id таблетки — чтобы журнал писал «3 капли», а не «3 таблетки». */
     val formById: Map<Long, String> = emptyMap(),
+    /** Дозировка по id таблетки — для коротких подписей схемы дня («Эсц 10мг»). */
+    val doseInfoById: Map<Long, String> = emptyMap(),
 )
 
-/** Сводка одного дня для тепловой карты; [pending] — приёмы, время которых ещё не пришло (день идёт). */
-data class DayHeat(val taken: Int, val planned: Int, val pending: Int = 0)
+/** Точка приёма под числом в календаре: выпит, пропущен или просрочен, ещё впереди. */
+enum class HeatMark { TAKEN, MISSED, PENDING }
+
+/**
+ * Сводка одного дня для тепловой карты: [taken]/[planned] — по приёмам, чьё время уже прошло (заливка),
+ * [pending] — ещё впереди, [marks] — все приёмы дня по порядку для точек под числом.
+ */
+data class DayHeat(val taken: Int, val planned: Int, val pending: Int = 0, val marks: List<HeatMark> = emptyList())
+
+/** Точки календаря по приёмам дня: ожидающий с прошедшим временем — пропуск, с будущим — контур. Чистая, с тестом. */
+fun heatMarks(doses: List<Dose>, now: Long): List<HeatMark> = doses.sortedBy { it.plannedAt }.map { d ->
+    when {
+        d.status == DoseStatus.TAKEN -> HeatMark.TAKEN
+        d.status == DoseStatus.SKIPPED || d.plannedAt < now -> HeatMark.MISSED
+        else -> HeatMark.PENDING
+    }
+}
 
 /** Трекер и все его записи (новые первыми). */
 data class TrackerRow(
@@ -281,13 +298,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 allMeals.filter { epochDayOf(it) == day }
             }
+            val allMeds = db.medicationDao().getAllIncludingInactive()
             JournalState(
                 day = day,
                 doses = doses.sortedBy { it.plannedAt },
                 wakeAt = wake?.wakeAt,
                 bedAt = wake?.bedAt,
                 meals = meals.sorted(),
-                formById = db.medicationDao().getAllIncludingInactive().associate { it.id to it.form },
+                formById = allMeds.associate { it.id to it.form },
+                doseInfoById = allMeds.associate { it.id to it.doseInfo },
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), JournalState())
@@ -306,6 +325,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     taken = decided.count { it.status == DoseStatus.TAKEN },
                     planned = decided.size,
                     pending = list.size - decided.size,
+                    marks = heatMarks(list, now),
                 )
             }
             HeatmapState(monthStart = start, days = days)
@@ -449,7 +469,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onDone(outcome)
     }
 
-    suspend fun buildReport(days: Int, sections: Set<String>): String = Report.build(db, days, Lang.s, sections)
+    /** [hideEmpty] — для файла и отправки: разделы «нет данных» не печатаются; предпросмотр их показывает. */
+    suspend fun buildReport(days: Int, sections: Set<String>, hideEmpty: Boolean = false): String =
+        Report.build(db, days, Lang.s, sections, hideEmpty)
 
     // ---------- Действия ----------
 

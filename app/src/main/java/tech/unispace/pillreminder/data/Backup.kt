@@ -16,7 +16,7 @@ class BackupTooNewException : Exception()
  */
 object Backup {
 
-    const val JSON_VERSION = 4
+    const val JSON_VERSION = 5
 
     suspend fun exportJson(db: AppDatabase): String {
         val root = JSONObject()
@@ -52,7 +52,8 @@ object Backup {
                             .put("apartFromOthersMinutes", m.apartFromOthersMinutes)
                             .put("apartFromMedIds", m.apartFromMedIds)
                             .put("beforeMealMinutes", m.beforeMealMinutes)
-                            .put("mealCalories", m.mealCalories),
+                            .put("mealCalories", m.mealCalories)
+                            .put("weekdays", m.weekdays),
                     )
                 }
             },
@@ -235,6 +236,7 @@ object Backup {
                     apartFromOthersMinutes = o.optInt("apartFromOthersMinutes", 0),
                     beforeMealMinutes = o.optInt("beforeMealMinutes", 0),
                     mealCalories = o.optInt("mealCalories", 0),
+                    weekdays = o.optString("weekdays"),
                     apartFromMedIds = o.optString("apartFromMedIds"),
                 ),
             )

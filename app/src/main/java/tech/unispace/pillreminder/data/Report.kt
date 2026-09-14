@@ -22,13 +22,26 @@ object Report {
     const val SEC_LINKS = "links"
     val ALL_SECTIONS = setOf(SEC_INTAKES, SEC_MEDS, SEC_TRACKERS, SEC_NOTES, SEC_VISITS, SEC_LINKS)
 
-    private fun header(sb: StringBuilder, title: String) {
-        sb.appendLine()
-        sb.appendLine(title.uppercase())
-        sb.appendLine("─".repeat(title.length.coerceAtLeast(12)))
+    /** Раздел отчёта: заголовок и строки; пустой список строк — данных за период нет. */
+    data class Section(val title: String, val lines: List<String>)
+
+    /**
+     * Собрать текст из шапки и разделов. При [hideEmpty] разделы без данных пропускаются целиком —
+     * в файле для врача пустые графы «нет данных» только замусоривают лист; в предпросмотре они
+     * остаются, чтобы было видно, чего не хватает.
+     */
+    fun render(head: List<String>, sections: List<Section>, noData: String, hideEmpty: Boolean): String = buildString {
+        head.forEach { appendLine(it) }
+        for (section in sections) {
+            if (section.lines.isEmpty() && hideEmpty) continue
+            appendLine()
+            appendLine(section.title.uppercase())
+            appendLine("─".repeat(section.title.length.coerceAtLeast(12)))
+            if (section.lines.isEmpty()) appendLine(noData) else section.lines.forEach { appendLine(it) }
+        }
     }
 
-    suspend fun build(db: AppDatabase, days: Int, s: S, sections: Set<String> = ALL_SECTIONS): String {
+    suspend fun build(db: AppDatabase, days: Int, s: S, sections: Set<String> = ALL_SECTIONS, hideEmpty: Boolean = false): String {
         val toDay = today()
         val fromDay = toDay - days + 1
         val zone = java.time.ZoneId.systemDefault()
@@ -45,114 +58,101 @@ object Report {
         val taken = doses.count { it.status == DoseStatus.TAKEN }
         val skipped = doses.count { it.status == DoseStatus.SKIPPED }
 
-        return buildString {
-            appendLine(s.reportTitle.uppercase())
-            appendLine(
-                LocalDate.ofEpochDay(fromDay).format(dateFmt) + " — " +
-                    LocalDate.ofEpochDay(toDay).format(dateFmt) + " · " + s.periodDays(days),
-            )
+        val head = listOf(
+            s.reportTitle.uppercase(),
+            LocalDate.ofEpochDay(fromDay).format(dateFmt) + " — " +
+                LocalDate.ofEpochDay(toDay).format(dateFmt) + " · " + s.periodDays(days),
+        )
+        val parts = mutableListOf<Section>()
 
-            if (SEC_INTAKES in sections) {
-                header(this, s.repAdherence)
+        if (SEC_INTAKES in sections) {
+            parts += Section(
+                s.repAdherence,
                 if (planned == 0) {
-                    appendLine(s.repNoData)
+                    emptyList()
                 } else {
-                    val pct = taken * 100 / planned
-                    appendLine("$pct%")
-                    appendLine("  $planned ${s.repPlanned} · $taken ${s.repTaken} · $skipped ${s.repSkipped}")
-                }
-            }
+                    listOf("${taken * 100 / planned}%", "  $planned ${s.repPlanned} · $taken ${s.repTaken} · $skipped ${s.repSkipped}")
+                },
+            )
+        }
 
-            if (SEC_MEDS in sections) {
-                header(this, s.repMeds)
-                val byMed = doses.groupBy { it.medId }
-                if (byMed.isEmpty()) appendLine(s.repNoData)
-                byMed.forEach { (medId, list) ->
-                    val med = meds[medId]
-                    val name = med?.name ?: list.first().medNameSnapshot.ifBlank { "?" }
-                    appendLine("• $name")
-                    if (med != null) {
-                        val dose = listOf(s.formName(med.form), med.doseInfo).filter { it.isNotBlank() }.joinToString(" ")
-                        val schedule = when {
-                            med.asNeeded -> s.asNeededShort
-                            med.byClock -> s.byClockShort + " " + med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) }
-                            med.linkedToMedId != null -> s.afterMed(meds[med.linkedToMedId]?.name ?: "?", s.duration(med.linkedDelayMinutes))
-                            else -> s.schedule(med.timesPerDay, med.intervalMinutes, med.everyNDays)
-                        }
-                        appendLine("  $dose · ${s.perIntake(s.pills(med.dosesPerIntake, med.form))}")
-                        appendLine("  ${s.repSchedule}: $schedule")
+        if (SEC_MEDS in sections) {
+            val lines = mutableListOf<String>()
+            doses.groupBy { it.medId }.forEach { (medId, list) ->
+                val med = meds[medId]
+                val name = med?.name ?: list.first().medNameSnapshot.ifBlank { "?" }
+                lines += "• $name"
+                if (med != null) {
+                    val dose = listOf(s.formName(med.form), med.doseInfo).filter { it.isNotBlank() }.joinToString(" ")
+                    val schedule = when {
+                        med.asNeeded -> s.asNeededShort
+                        med.byClock -> s.byClockShort + " " + med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) }
+                        med.linkedToMedId != null -> s.afterMed(meds[med.linkedToMedId]?.name ?: "?", s.duration(med.linkedDelayMinutes))
+                        else -> s.schedule(med.timesPerDay, med.intervalMinutes, med.everyNDays, med.weekdaysList())
                     }
-                    val t = list.count { it.status == DoseStatus.TAKEN }
-                    val sk = list.count { it.status == DoseStatus.SKIPPED }
-                    val pct = if (list.isEmpty()) 0 else t * 100 / list.size
-                    appendLine("  $t ${s.repTaken} · $sk ${s.repSkipped} · ${list.size} ${s.repPlanned} · $pct%")
+                    lines += "  $dose · ${s.perIntake(s.pills(med.dosesPerIntake, med.form))}"
+                    lines += "  ${s.repSchedule}: $schedule"
                 }
+                val t = list.count { it.status == DoseStatus.TAKEN }
+                val sk = list.count { it.status == DoseStatus.SKIPPED }
+                val pct = if (list.isEmpty()) 0 else t * 100 / list.size
+                lines += "  $t ${s.repTaken} · $sk ${s.repSkipped} · ${list.size} ${s.repPlanned} · $pct%"
             }
+            parts += Section(s.repMeds, lines)
+        }
 
-            if (SEC_TRACKERS in sections) {
-                val trackers = db.trackerDao().getAll()
-                val entries = db.trackerDao().getAllEntries().filter { it.atMillis >= fromMillis }
-                for (tracker in trackers) {
-                    val mine = entries.filter { it.trackerId == tracker.id }
-                    val title = when (tracker.type) {
-                        TrackerType.WEIGHT -> s.trackerWeight
-                        TrackerType.MOOD -> s.trackerMood
-                        else -> s.trackerSleep
+        if (SEC_TRACKERS in sections) {
+            val trackers = db.trackerDao().getAll()
+            val entries = db.trackerDao().getAllEntries().filter { it.atMillis >= fromMillis }
+            for (tracker in trackers) {
+                val mine = entries.filter { it.trackerId == tracker.id }
+                val title = when (tracker.type) {
+                    TrackerType.WEIGHT -> s.trackerWeight
+                    TrackerType.MOOD -> s.trackerMood
+                    else -> s.trackerSleep
+                }
+                val lines = mutableListOf<String>()
+                // Неоценённые автозаписи сна (значение 0) в статистику оценок не идут — только в часы сна.
+                val values = mine.map { it.value }.filter { tracker.type == TrackerType.WEIGHT || it > 0 }
+                if (values.isNotEmpty()) {
+                    lines += "  ${s.minLabel} ${fmt(values.min())} · ${s.maxLabel} ${fmt(values.max())} · " +
+                        "${s.avgLabel} ${fmt(values.average())} · n=${values.size}"
+                }
+                if (tracker.type == TrackerType.SLEEP) {
+                    val durations = mine.mapNotNull { e ->
+                        if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
                     }
-                    header(this, title)
-                    // Неоценённые автозаписи сна (значение 0) в статистику оценок не идут — только в часы сна.
-                    val values = mine.map { it.value }.filter { tracker.type == TrackerType.WEIGHT || it > 0 }
-                    if (mine.isEmpty()) {
-                        appendLine(s.repNoData)
-                    } else {
-                        if (values.isEmpty()) {
-                            appendLine(s.repNoData)
-                        } else {
-                            appendLine(
-                                "  ${s.minLabel} ${fmt(values.min())} · ${s.maxLabel} ${fmt(values.max())} · " +
-                                    "${s.avgLabel} ${fmt(values.average())} · n=${values.size}",
-                            )
-                        }
-                        if (tracker.type == TrackerType.SLEEP) {
-                            val durations = mine.mapNotNull { e ->
-                                if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
-                            }
-                            if (durations.isNotEmpty()) {
-                                appendLine("  ${s.seriesSleepHours}: ${s.avgLabel} ${fmt(durations.average())}")
-                            }
-                        }
-                    }
+                    if (durations.isNotEmpty()) lines += "  ${s.seriesSleepHours}: ${s.avgLabel} ${fmt(durations.average())}"
                 }
-            }
-
-            if (SEC_NOTES in sections) {
-                header(this, s.repNotes)
-                val notes = db.noteDao().observeAllOnce().filter { it.atMillis >= fromMillis }
-                if (notes.isEmpty()) appendLine(s.repNoData)
-                notes.sortedBy { it.atMillis }.forEach { n ->
-                    val date = java.time.Instant.ofEpochMilli(n.atMillis).atZone(zone).toLocalDate().format(dateFmt)
-                    appendLine("• $date ${formatClock(n.atMillis)} — ${n.title}")
-                    if (n.description.isNotBlank()) appendLine("  ${n.description}")
-                }
-            }
-
-            if (SEC_LINKS in sections) {
-                header(this, s.corrReportSection)
-                val lines = correlationLines(db, fromDay, toDay, s)
-                if (lines.isEmpty()) appendLine(s.repNoData) else lines.forEach { appendLine(it) }
-            }
-
-            if (SEC_VISITS in sections) {
-                header(this, s.repVisits)
-                val visits = db.visitDao().getAll().filter { it.atMillis >= fromMillis }
-                if (visits.isEmpty()) appendLine(s.repNoData)
-                visits.sortedBy { it.atMillis }.forEach { v ->
-                    val date = java.time.Instant.ofEpochMilli(v.atMillis).atZone(zone).toLocalDate().format(dateFmt)
-                    appendLine("• $date ${formatClock(v.atMillis)} — ${v.title}" + if (v.place.isNotBlank()) " (${v.place})" else "")
-                    if (v.comment.isNotBlank()) appendLine("  ${v.comment}")
-                }
+                parts += Section(title, lines)
             }
         }
+
+        if (SEC_NOTES in sections) {
+            val lines = mutableListOf<String>()
+            db.noteDao().observeAllOnce().filter { it.atMillis >= fromMillis }.sortedBy { it.atMillis }.forEach { n ->
+                val date = java.time.Instant.ofEpochMilli(n.atMillis).atZone(zone).toLocalDate().format(dateFmt)
+                lines += "• $date ${formatClock(n.atMillis)} — ${n.title}"
+                if (n.description.isNotBlank()) lines += "  ${n.description}"
+            }
+            parts += Section(s.repNotes, lines)
+        }
+
+        if (SEC_LINKS in sections) {
+            parts += Section(s.corrReportSection, correlationLines(db, fromDay, toDay, s))
+        }
+
+        if (SEC_VISITS in sections) {
+            val lines = mutableListOf<String>()
+            db.visitDao().getAll().filter { it.atMillis >= fromMillis }.sortedBy { it.atMillis }.forEach { v ->
+                val date = java.time.Instant.ofEpochMilli(v.atMillis).atZone(zone).toLocalDate().format(dateFmt)
+                lines += "• $date ${formatClock(v.atMillis)} — ${v.title}" + if (v.place.isNotBlank()) " (${v.place})" else ""
+                if (v.comment.isNotBlank()) lines += "  ${v.comment}"
+            }
+            parts += Section(s.repVisits, lines)
+        }
+
+        return render(head, parts, s.repNoData, hideEmpty)
     }
 
     /**
