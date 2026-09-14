@@ -6,16 +6,17 @@ import android.content.Intent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import tech.unispace.pillreminder.container
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.MEAL_WAIT_MAX_MS
 import tech.unispace.pillreminder.data.MINUTE_MS
+import tech.unispace.pillreminder.data.OVERDUE_GRACE_MS
 import tech.unispace.pillreminder.data.Planner
 import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.data.mealSatisfied
 import tech.unispace.pillreminder.ui.Lang
+import tech.unispace.pillreminder.ui.snoozedUntil
 
 /**
  * Срабатывает в момент приёма: показывает уведомление и, если приём так и не отмечен,
@@ -102,19 +103,23 @@ class ReminderReceiver : BroadcastReceiver() {
                         if (gated) append(" · ").append(Lang.s.mealNotMarked)
                     }
                 }
-                // Несколько таблеток в одну минуту — одно уведомление на всех, а не стопка.
-                // В группу берём только тех, кому действительно пора: приём, ждущий кнопку «Еда»,
-                // за компанию звонить не должен (тот же судья, что и у будильника — mealSatisfied).
+                // Всё, чему сейчас пора, — одним уведомлением, а не стопкой: иначе приёмы с разным плановым временем
+                // («Сразу» и «+30 мин») вели отдельные цепочки повторов и звонили вдвоём каждые три минуты.
+                // В группу не берём: ждущих кнопку «Еда» (тот же судья, что у будильника — mealSatisfied), отложенных
+                // и просроченных больше OVERDUE_GRACE_MS — те остаются в списке дня молча. Сам сработавший приём — всегда.
                 val batch = (
                     dayDoses.filter { d ->
-                        d.status == DoseStatus.PENDING && abs(d.plannedAt - dose.plannedAt) <= GROUP_WINDOW_MS &&
+                        d.status == DoseStatus.PENDING && d.plannedAt <= now + GROUP_WINDOW_MS &&
+                            now - d.plannedAt <= OVERDUE_GRACE_MS && d.snoozedUntil(now) == null &&
                             medsById[d.medId]?.let { m -> m.active && mealSatisfied(m, d, dayDoses, meals, wakeAt) } == true
                     } + dose
                     ).distinctBy { it.id }.sortedBy { it.id }
                 val leader = batch.first()
                 if (batch.size > 1 && leader.id != doseId) {
                     // Уведомление ведёт «старший» приём группы, но свой повтор ведомый ставит сам:
-                    // когда старшего отметят, следующим звонком старшим станет он.
+                    // когда старшего отметят, следующим звонком старшим станет он. Своё прежнее одиночное
+                    // уведомление ведомый снимает — иначе в шторке висели бы и оно, и групповое.
+                    Notifications.dismiss(app, doseId)
                     scheduleNext(planner, settings, dose, attempt)
                     return@launch
                 }
@@ -179,7 +184,7 @@ class ReminderReceiver : BroadcastReceiver() {
     companion object {
         const val EXTRA_ATTEMPT = "attempt"
 
-        /** Насколько близкие по времени приёмы считаются одной группой. */
+        /** Запас вперёд: приём, чьё время наступает в ближайшую минуту, попадает в группу к текущему звонку. */
         private const val GROUP_WINDOW_MS = 60_000L
         const val EXTRA_TEST = "test"
         const val EXTRA_TEST_FULL_SCREEN = "testFullScreen"

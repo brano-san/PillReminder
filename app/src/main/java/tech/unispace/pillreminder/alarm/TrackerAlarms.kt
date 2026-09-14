@@ -27,6 +27,22 @@ fun trackerDisplayName(type: String): String = when (type) {
 /** Максимум времён опроса в день — ограничивает диапазон requestCode. */
 const val MAX_ASK_TIMES = 8
 
+/** Насколько близкие времена опроса разных трекеров считаются одним моментом (одно уведомление на всех). */
+const val TRACKER_GROUP_WINDOW_MIN = 1
+
+/**
+ * Пора ли напомнить трекеру в слоте [slot]: записи после предыдущего слота (или с полуночи) не было.
+ * Чистая функция — проверяется тестом. [dayStart] — полночь текущего дня в миллисекундах.
+ */
+fun trackerNeedsEntry(times: List<Int>, slot: Int, lastEntryAt: Long?, dayStart: Long): Boolean {
+    val since = times.getOrNull(slot - 1)?.let { dayStart + it * 60_000L } ?: dayStart
+    return lastEntryAt == null || lastEntryAt < since
+}
+
+/** Слот трекера, чьё время опроса совпадает с [nowMinutes] (± окно); null — сейчас не его время. */
+fun trackerSlotAt(times: List<Int>, nowMinutes: Int): Int? =
+    times.indexOfFirst { kotlin.math.abs(it - nowMinutes) <= TRACKER_GROUP_WINDOW_MIN }.takeIf { it >= 0 }
+
 /** Напоминания трекеров: «пора записать вес/настроение/сон» — N раз в день в заданные часы. */
 object TrackerAlarms {
 
@@ -80,25 +96,21 @@ class TrackerReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = app.container.db
-                val tracker = db.trackerDao().getById(trackerId) ?: return@launch
-                val times = tracker.askTimesList()
-                // Напоминаем, если после предыдущего слота (или с полуночи) записи не было.
+                db.trackerDao().getById(trackerId) ?: return@launch
+                // Все трекеры, которым пора сейчас, — одним уведомлением: три опроса на 20:00 иначе приходили
+                // тремя карточками в шторке. Сработавший трекер берётся по своему слоту, остальные — по совпадению времени.
                 val zone = ZoneId.systemDefault()
-                val prevMinutes = times.getOrNull(slot - 1)
-                val since = if (prevMinutes == null) {
-                    LocalDate.now().atStartOfDay(zone).toInstant().toEpochMilli()
-                } else {
-                    LocalDate.now().atTime(LocalTime.of(prevMinutes / 60, prevMinutes % 60))
-                        .atZone(zone).toInstant().toEpochMilli()
+                val nowTime = LocalTime.now(zone)
+                val nowMinutes = nowTime.hour * 60 + nowTime.minute
+                val dayStart = LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
+                val due = db.trackerDao().getAll().filter { it.remindEnabled }.filter { t ->
+                    val times = t.askTimesList()
+                    val s = if (t.id == trackerId) slot else trackerSlotAt(times, nowMinutes)
+                    s != null && trackerNeedsEntry(times, s, db.trackerDao().lastEntry(t.id)?.atMillis, dayStart)
                 }
-                val last = db.trackerDao().lastEntry(trackerId)
-                if (last == null || last.atMillis < since) {
-                    Notifications.showTracker(
-                        app,
-                        trackerId,
-                        Lang.s.trackerNotifTitle(trackerDisplayName(tracker.type)),
-                        Lang.s.trackerNotifBody,
-                    )
+                if (due.isNotEmpty()) {
+                    val names = due.joinToString(", ") { trackerDisplayName(it.type).replaceFirstChar { c -> c.lowercase() } }
+                    Notifications.showTrackers(app, Lang.s.trackerNotifTitle(names), Lang.s.trackerNotifBody)
                 }
                 TrackerAlarms.reschedule(app, db)
             } finally {

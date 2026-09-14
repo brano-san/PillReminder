@@ -22,6 +22,8 @@ object Notifications {
     private const val BASE_DEFAULT = "pill_reminders"
     private const val BASE_ALARM = "pill_reminders_alarm"
     const val CHANNEL_VISITS = "doctor_visits"
+    /** Опросы трекеров: отдельный канал обычной важности — без всплывающей плашки поверх напоминания о таблетке. */
+    const val CHANNEL_TRACKERS = "tracker_prompts"
     const val EXTRA_DOSE_ID = "doseId"
 
     private fun suffix(context: Context): String {
@@ -93,7 +95,15 @@ object Notifications {
             enableVibration(true)
         }
 
-        manager.createNotificationChannels(listOf(default, alarm, visits))
+        val trackers = NotificationChannel(
+            CHANNEL_TRACKERS,
+            s.channelTrackersName,
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = s.channelTrackersDesc
+        }
+
+        manager.createNotificationChannels(listOf(default, alarm, visits, trackers))
     }
 
     /**
@@ -305,22 +315,27 @@ object Notifications {
         notifySafely(context, (VISIT_ID_BASE + visitId).toInt(), builder)
     }
 
-    fun showTracker(context: Context, trackerId: Long, title: String, text: String) {
-        val builder = NotificationCompat.Builder(context, defaultChannelId(context))
+    /**
+     * Одно уведомление на все трекеры, которым пора сейчас: id фиксированный, поэтому три ресивера,
+     * сработавшие в одну минуту, перезаписывают одну карточку, а не выкладывают стопку.
+     */
+    fun showTrackers(context: Context, title: String, text: String) {
+        val builder = NotificationCompat.Builder(context, CHANNEL_TRACKERS)
             .setSmallIcon(R.drawable.ic_pill)
             .setContentTitle(title)
             .setContentText(text)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(
                 PendingIntent.getActivity(
                     context,
-                    (820_000 + trackerId).toInt(),
+                    TRACKERS_ID,
                     Intent(context, MainActivity::class.java),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 ),
             )
-        notifySafely(context, (820_000 + trackerId).toInt(), builder)
+        notifySafely(context, TRACKERS_ID, builder)
     }
 
     fun showLowStock(context: Context, medId: Long, name: String, left: Double, form: String) {
@@ -389,4 +404,5 @@ object Notifications {
 
     private const val VISIT_ID_BASE = 500_000L
     private const val DAY_DONE_ID = 900_001
+    private const val TRACKERS_ID = 820_000
 }

@@ -140,6 +140,9 @@ private fun amberText(): Color = if (isSystemInDarkTheme()) Color(0xFFFFC65C) el
 /** Сколько держать подсветку карточки после тапа по кружку на схеме дня. */
 private const val HIGHLIGHT_MS = 2_500L
 
+/** Сколько после планового времени карточка пишет «сейчас», а не «опоздание на N мин». */
+const val DUE_TEXT_GRACE_MS = 5 * 60_000L
+
 @Composable
 fun HomeScreen(
     state: HomeState,
@@ -965,7 +968,9 @@ private fun MedCard(
                 mealTimedOut -> s.mealNotMarked
                 // «ждёт «Еда»» — только когда время уже наступило; до того полезнее обратный отсчёт.
                 row.waitsMeal && next.plannedAt <= now -> s.waitsMealShort
-                else -> s.countdown(next.plannedAt - now)
+                // Первые минуты после планового времени — «сейчас», а не «опоздание на 2 мин»: приложение само
+                // ещё не напомнило (первый звонок — через интервал повторов), так что и опоздания пока нет.
+                else -> s.countdown((next.plannedAt - now).let { if (it < 0 && -it < DUE_TEXT_GRACE_MS) 0L else it })
             }
             // Компактный режим без времени всё равно объясняет, почему нет кнопки.
             val compactStatus = when {

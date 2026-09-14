@@ -238,6 +238,8 @@ interface S {
     val channelAlarmName: String
     val channelAlarmDesc: String
     val channelVisitsName: String
+    val channelTrackersName: String
+    val channelTrackersDesc: String
     val timeToTakeFallback: String
     val visitNotifTitle: String
 
@@ -1031,6 +1033,8 @@ object RU : S {
     override val channelAlarmDesc = "То же самое, но звук идёт как у будильника — " +
         "слышно даже в беззвучном режиме"
     override val channelVisitsName = "Визиты к врачу"
+    override val channelTrackersName = "Опросы трекеров"
+    override val channelTrackersDesc = "«Пора записать вес, настроение, сон» — обычная важность, без плашки поверх экрана."
     override val timeToTakeFallback = "Пора выпить таблетку"
     override val visitNotifTitle = "Приём у врача"
 
@@ -1916,6 +1920,8 @@ object EN : S {
     override val channelAlarmDesc = "Same, but the sound plays like an alarm — " +
         "audible even in silent mode"
     override val channelVisitsName = "Doctor visits"
+    override val channelTrackersName = "Tracker prompts"
+    override val channelTrackersDesc = "\"Time to record weight, mood, sleep\" — normal importance, no heads-up banner."
     override val timeToTakeFallback = "Time to take a pill"
     override val visitNotifTitle = "Doctor appointment"
 

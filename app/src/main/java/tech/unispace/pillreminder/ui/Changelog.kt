@@ -16,6 +16,20 @@ data class ReleaseNotes(
 
 val CHANGELOG: List<ReleaseNotes> = listOf(
     ReleaseNotes(
+        version = "1.2.2",
+        date = "14.09.2026",
+        ru = listOf(
+            "Всё, чему пора, — одним уведомлением: приёмы с разным плановым временем больше не звонят параллельными цепочками каждые три минуты.",
+            "Первые пять минут после планового времени карточка пишет «сейчас», а не «опоздание на 2 мин».",
+            "Трекеры на одно время — одно уведомление «Пора записать: вес, настроение, сон» в отдельном канале обычной важности, без плашки поверх напоминания о таблетке.",
+        ),
+        en = listOf(
+            "Everything that is due comes as one notification: intakes with different planned times no longer ring in parallel chains every three minutes.",
+            "For the first five minutes after the planned time the card says \"now\" instead of \"2 min late\".",
+            "Trackers set to the same time come as one notification \"Time to record: weight, mood, sleep\" in a separate normal-importance channel, without a heads-up banner over the pill reminder.",
+        ),
+    ),
+    ReleaseNotes(
         version = "1.2.1",
         date = "13.09.2026",
         ru = listOf(
