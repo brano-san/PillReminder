@@ -16,6 +16,22 @@ data class ReleaseNotes(
 
 val CHANGELOG: List<ReleaseNotes> = listOf(
     ReleaseNotes(
+        version = "1.2.4",
+        date = "16.09.2026",
+        ru = listOf(
+            "Отчёт для врача: таблетки можно отмечать галочками — то, что к этому врачу не относится, не попадёт ни в списки, ни в процент дисциплины.",
+            "Набор таблеток сохраняется как пресет врача («Кардиолог», «Эндокринолог») и выбирается одним нажатием; рядом короткая подсказка, как это работает.",
+            "Мастер: форма выпуска — выпадающим списком; поле дозировки во всю ширину, без единицы справа.",
+            "Бегущая строка осталась только у названий таблеток — на кнопках-пресетах текст больше не крутится.",
+        ),
+        en = listOf(
+            "Doctor report: pick the pills with checkboxes — anything unrelated to this doctor stays out of the lists and of the adherence percentage.",
+            "A selection can be saved as a doctor preset (\"Cardiologist\", \"Endocrinologist\") and applied with one tap; a short guide explains it in place.",
+            "Wizard: the dosage form is a dropdown; the strength field spans the full width, with no unit label beside it.",
+            "The marquee is now limited to pill names — preset buttons no longer scroll their text.",
+        ),
+    ),
+    ReleaseNotes(
         version = "1.2.3",
         date = "15.09.2026",
         ru = listOf(

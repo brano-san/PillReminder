@@ -170,6 +170,18 @@ interface NoteDao {
 }
 
 @Dao
+interface DoctorPresetDao {
+    @Query("SELECT * FROM doctor_presets ORDER BY name")
+    suspend fun getAll(): List<DoctorPreset>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(preset: DoctorPreset): Long
+
+    @Query("DELETE FROM doctor_presets WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+
+@Dao
 interface VisitDao {
     @Query("SELECT * FROM visits ORDER BY atMillis")
     fun observeAll(): Flow<List<DoctorVisit>>

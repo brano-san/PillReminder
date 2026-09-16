@@ -22,6 +22,15 @@ object Report {
     const val SEC_LINKS = "links"
     val ALL_SECTIONS = setOf(SEC_INTAKES, SEC_MEDS, SEC_TRACKERS, SEC_NOTES, SEC_VISITS, SEC_LINKS)
 
+    /**
+     * Идёт ли приём в отчёт: за период, уже наступивший (сегодняшние будущие приёмы — не пропуски)
+     * и по выбранным таблеткам ([medIds] = null — по всем). Одно правило для отчёта и корреляций.
+     */
+    fun includeDose(dose: Dose, fromDay: Long, toDay: Long, now: Long, medIds: Set<Long>? = null): Boolean =
+        dose.dayEpochDay in fromDay..toDay &&
+            (dose.status != DoseStatus.PENDING || dose.plannedAt < now) &&
+            (medIds == null || dose.medId in medIds)
+
     /** Раздел отчёта: заголовок и строки; пустой список строк — данных за период нет. */
     data class Section(val title: String, val lines: List<String>)
 
@@ -41,7 +50,15 @@ object Report {
         }
     }
 
-    suspend fun build(db: AppDatabase, days: Int, s: S, sections: Set<String> = ALL_SECTIONS, hideEmpty: Boolean = false): String {
+    suspend fun build(
+        db: AppDatabase,
+        days: Int,
+        s: S,
+        sections: Set<String> = ALL_SECTIONS,
+        hideEmpty: Boolean = false,
+        /** Таблетки, о которых говорят с этим врачом; null — все. */
+        medIds: Set<Long>? = null,
+    ): String {
         val toDay = today()
         val fromDay = toDay - days + 1
         val zone = java.time.ZoneId.systemDefault()
@@ -50,9 +67,7 @@ object Report {
 
         // Сегодняшние ещё не наступившие приёмы — не пропуски: считаем так же, как экран истории.
         val now = System.currentTimeMillis()
-        val doses = db.doseDao().getAll().filter {
-            it.dayEpochDay in fromDay..toDay && (it.status != DoseStatus.PENDING || it.plannedAt < now)
-        }
+        val doses = db.doseDao().getAll().filter { includeDose(it, fromDay, toDay, now, medIds) }
         val meds = db.medicationDao().getAllIncludingInactive().associateBy { it.id }
         val planned = doses.size
         val taken = doses.count { it.status == DoseStatus.TAKEN }
@@ -139,7 +154,7 @@ object Report {
         }
 
         if (SEC_LINKS in sections) {
-            parts += Section(s.corrReportSection, correlationLines(db, fromDay, toDay, s))
+            parts += Section(s.corrReportSection, correlationLines(db, fromDay, toDay, s, medIds))
         }
 
         if (SEC_VISITS in sections) {
@@ -159,7 +174,7 @@ object Report {
      * Парные корреляции между сериями (вес, настроение, качество сна, часы сна, дисциплина).
      * Считаем по дням, где есть обе величины; меньше трёх общих дней — связь не показываем.
      */
-    private suspend fun correlationLines(db: AppDatabase, fromDay: Long, toDay: Long, s: S): List<String> {
+    private suspend fun correlationLines(db: AppDatabase, fromDay: Long, toDay: Long, s: S, medIds: Set<Long>? = null): List<String> {
         val days = (fromDay..toDay).toList()
         val trackers = db.trackerDao().getAll()
         val entries = db.trackerDao().getAllEntries()
@@ -183,7 +198,7 @@ object Report {
 
         val now = System.currentTimeMillis()
         val doses = db.doseDao().getAll()
-            .filter { it.dayEpochDay in fromDay..toDay && (it.status != DoseStatus.PENDING || it.plannedAt < now) }
+            .filter { includeDose(it, fromDay, toDay, now, medIds) }
             .groupBy { it.dayEpochDay }
         val adherence = days.map { day ->
             val list = doses[day].orEmpty()

@@ -25,12 +25,13 @@ class Converters {
         WakeEvent::class,
         Note::class,
         DoctorVisit::class,
+        DoctorPreset::class,
         MedLibraryEntry::class,
         Tracker::class,
         TrackerEntry::class,
         MealEvent::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -41,6 +42,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun wakeDao(): WakeDao
     abstract fun noteDao(): NoteDao
     abstract fun visitDao(): VisitDao
+    abstract fun doctorPresetDao(): DoctorPresetDao
     abstract fun libraryDao(): LibraryDao
     abstract fun trackerDao(): TrackerDao
     abstract fun mealDao(): MealDao
@@ -102,14 +104,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /** 4 → 5: версия 1.2.3 (выпущена 15.09.2026) — приём по дням недели. Зафиксирована: новые поля — в 5 → 6. */
+        /** 4 → 5: версия 1.2.3 (выпущена 15.09.2026) — приём по дням недели. ЗАФИКСИРОВАНА: новые поля — в 5 → 6. */
         private val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE medications ADD COLUMN weekdays TEXT NOT NULL DEFAULT ''")
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+        /** 5 → 6: версия 1.2.4 (выпущена 16.09.2026) — пресеты врачей для отчёта. ЗАФИКСИРОВАНА: новое — в 6 → 7. */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `doctor_presets` " +
+                        "(`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `medIds` TEXT NOT NULL)",
+                )
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> =
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

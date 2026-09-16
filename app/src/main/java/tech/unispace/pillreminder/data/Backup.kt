@@ -16,7 +16,7 @@ class BackupTooNewException : Exception()
  */
 object Backup {
 
-    const val JSON_VERSION = 5
+    const val JSON_VERSION = 6
 
     suspend fun exportJson(db: AppDatabase): String {
         val root = JSONObject()
@@ -110,6 +110,15 @@ object Backup {
                             .put("place", v.place)
                             .put("remind", v.remind),
                     )
+                }
+            },
+        )
+
+        root.put(
+            "doctorPresets",
+            JSONArray().apply {
+                db.doctorPresetDao().getAll().forEach { p ->
+                    put(JSONObject().put("name", p.name).put("medIds", p.medIds))
                 }
             },
         )
@@ -302,6 +311,15 @@ object Backup {
                     remind = o.optBoolean("remind", true),
                 ),
             )
+        }
+
+        // Пресеты врачей ссылаются на таблетки по id — переводим их так же, как связи и приёмы.
+        val presetsArr = root.optJSONArray("doctorPresets") ?: JSONArray()
+        for (i in 0 until presetsArr.length()) {
+            val o = presetsArr.getJSONObject(i)
+            val ids = o.optString("medIds").split(',').mapNotNull { it.trim().toLongOrNull() }
+                .mapNotNull { medIdMap[it] }
+            db.doctorPresetDao().upsert(DoctorPreset(name = o.getString("name"), medIds = ids.joinToString(",")))
         }
 
         val libArr = root.optJSONArray("library") ?: JSONArray()

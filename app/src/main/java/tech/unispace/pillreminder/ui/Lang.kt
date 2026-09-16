@@ -798,6 +798,19 @@ interface S {
     val duplicateAdd: String
     val duplicateHint: String
     val longPressBody: String
+    val repFilterSection: String
+    val repFilterGuide: String
+    fun repFilterCount(n: Int, total: Int): String
+    val repFilterAll: String
+    val repFilterNone: String
+    val repFilterEmpty: String
+    val repArchivedMark: String
+    val repPresetsTitle: String
+    val repPresetSave: String
+    val repPresetNameLabel: String
+    val repPresetSaved: String
+    val repPresetRemoved: String
+    val repPresetReplace: String
     val courseSpoiler: String
 }
 
@@ -1718,6 +1731,21 @@ object RU : S {
     override val duplicateAdd = "Всё равно добавить"
     override val duplicateHint = "Уже есть в расписании"
     override val longPressBody = "Что сделать с таблеткой?"
+    override val repFilterSection = "Таблетки в отчёте"
+    override val repFilterGuide = "По умолчанию в отчёт идут все таблетки. Снимите галочки с тех, что не относятся " +
+        "к этому врачу: они не попадут ни в списки, ни в процент дисциплины. Набор можно сохранить под именем " +
+        "врача — «Кардиолог», «Эндокринолог» — и в следующий раз выбрать одним нажатием."
+    override fun repFilterCount(n: Int, total: Int) = "Выбрано $n из $total"
+    override val repFilterAll = "Все"
+    override val repFilterNone = "Снять все"
+    override val repFilterEmpty = "Не выбрано ни одной таблетки — разделы о приёмах будут пустыми."
+    override val repArchivedMark = "архив"
+    override val repPresetsTitle = "Пресеты врачей"
+    override val repPresetSave = "Сохранить выбор как пресет…"
+    override val repPresetNameLabel = "Врач или специальность"
+    override val repPresetSaved = "Пресет сохранён"
+    override val repPresetRemoved = "Пресет удалён"
+    override val repPresetReplace = "Пресет с таким именем будет перезаписан."
     override val courseSpoiler = "Ограничить курс по дням…"
 }
 
@@ -2623,5 +2651,20 @@ object EN : S {
     override val duplicateAdd = "Add anyway"
     override val duplicateHint = "Already scheduled"
     override val longPressBody = "What to do with this pill?"
+    override val repFilterSection = "Pills in the report"
+    override val repFilterGuide = "By default the report covers every pill. Uncheck the ones this doctor is not " +
+        "treating: they stay out of the lists and out of the adherence percentage. Save a set under the doctor's " +
+        "name — \"Cardiologist\", \"Endocrinologist\" — and pick it with one tap next time."
+    override fun repFilterCount(n: Int, total: Int) = "$n of $total selected"
+    override val repFilterAll = "All"
+    override val repFilterNone = "Clear"
+    override val repFilterEmpty = "No pills selected — the intake sections will be empty."
+    override val repArchivedMark = "archived"
+    override val repPresetsTitle = "Doctor presets"
+    override val repPresetSave = "Save selection as a preset…"
+    override val repPresetNameLabel = "Doctor or speciality"
+    override val repPresetSaved = "Preset saved"
+    override val repPresetRemoved = "Preset removed"
+    override val repPresetReplace = "A preset with this name will be overwritten."
     override val courseSpoiler = "Limit the course by days…"
 }

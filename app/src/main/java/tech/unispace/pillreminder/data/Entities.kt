@@ -210,6 +210,22 @@ data class DoctorVisit(
     val remind: Boolean = true,
 )
 
+/**
+ * Пресет врача для отчёта: набор таблеток, о которых говорят именно с этим специалистом.
+ * Кардиологу не нужен список витаминов, а дисциплина по ним искажает процент в шапке отчёта.
+ */
+@Entity(tableName = "doctor_presets")
+data class DoctorPreset(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Имя врача или специальность — то, что видно чипом в отчёте. */
+    val name: String,
+    /** CSV id таблеток; пустая строка — пресет ни одну таблетку не включает. */
+    val medIds: String = "",
+)
+
+/** Таблетки пресета; несуществующие id отфильтрует экран — таблетку могли удалить. */
+fun DoctorPreset.medIdsList(): List<Long> = medIds.split(',').mapNotNull { it.trim().toLongOrNull() }
+
 /** Запись каталога лекарств: что пил раньше, на что влияло, как переносилось. */
 @Entity(tableName = "med_library")
 data class MedLibraryEntry(

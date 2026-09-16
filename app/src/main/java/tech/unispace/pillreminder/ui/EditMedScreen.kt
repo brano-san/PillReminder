@@ -165,6 +165,8 @@ private fun FlowRowScope.GridChip(
     label: String,
     modifier: Modifier = Modifier.weight(1f),
     enabled: Boolean = true,
+    /** Карусель — только для названий таблеток: у пресетов вроде «не ближе 30 мин» бегущая строка отвлекает. */
+    marquee: Boolean = false,
     onClick: () -> Unit,
 ) {
     FilterChip(
@@ -172,8 +174,13 @@ private fun FlowRowScope.GridChip(
         onClick = onClick,
         enabled = enabled,
         label = {
-            // Длинное название едет каруселью, а не режется многоточием.
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { MarqueeText(label, textAlign = TextAlign.Center) }
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                if (marquee) {
+                    MarqueeText(label, textAlign = TextAlign.Center)
+                } else {
+                    Text(label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                }
+            }
         },
         modifier = modifier,
     )
@@ -954,12 +961,39 @@ fun EditMedScreen(
                             Text(s.openLibrary, maxLines = 1, softWrap = false)
                         }
                                             SectionCard(s.formSection, anchorMod(Anchor.FORM), highlightAnchor == Anchor.FORM) {
-                            // 3 колонки: семь форм и «другая…» на две клетки — ровно три ряда.
-                            ChipGrid(columns = 3) {
-                                MED_FORMS.forEachIndexed { i, f ->
-                                    GridChip(selected = form == f && !formIsCustom, label = s.forms.getOrElse(i) { f }) { form = f; formIsCustom = false }
+                            // Восемь вариантов выпадающим списком: сетка чипов занимала три ряда ради одного выбора,
+                            // который делают один раз и почти всегда оставляют «Таблетка».
+                            var formMenu by remember { mutableStateOf(false) }
+                            ExposedDropdownMenuBox(expanded = formMenu, onExpandedChange = { formMenu = it }) {
+                                OutlinedTextField(
+                                    value = if (formIsCustom) s.otherForm else s.forms.getOrElse(MED_FORMS.indexOf(form)) { form },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text(s.formSection) },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = formMenu) },
+                                    colors = fieldColors(),
+                                    modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                                )
+                                ExposedDropdownMenu(expanded = formMenu, onDismissRequest = { formMenu = false }) {
+                                    MED_FORMS.forEachIndexed { i, f ->
+                                        DropdownMenuItem(
+                                            text = { Text(s.forms.getOrElse(i) { f }) },
+                                            onClick = {
+                                                form = f
+                                                formIsCustom = false
+                                                formMenu = false
+                                            },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(s.otherForm) },
+                                        onClick = {
+                                            formIsCustom = true
+                                            form = ""
+                                            formMenu = false
+                                        },
+                                    )
                                 }
-                                GridChip(selected = formIsCustom, label = s.otherForm, modifier = Modifier.weight(2f)) { formIsCustom = true; form = "" }
                             }
                             if (formIsCustom) {
                                 OutlinedTextField(
@@ -976,19 +1010,18 @@ fun EditMedScreen(
                         }
                         // Дозировка: число + единица чипами, а не свободный текст.
                         SectionCard(s.doseSection, anchorMod(Anchor.DOSE), highlightAnchor == Anchor.DOSE) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                OutlinedTextField(
-                                    value = doseValue,
-                                    onValueChange = { doseValue = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
-                                    label = { Text(s.doseValueLabel) },
-                                    placeholder = { Text("500") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                    singleLine = true,
-                                    colors = fieldColors(),
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Text(doseUnit, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                            }
+                            // Единица не дублируется справа от поля: она и так выбрана чипом ниже, а поле
+                            // из-за неё было уже сетки пресетов — границы не совпадали.
+                            OutlinedTextField(
+                                value = doseValue,
+                                onValueChange = { doseValue = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                                label = { Text(s.doseValueLabel) },
+                                placeholder = { Text("500") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                colors = fieldColors(),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                             // Восемь единиц и «другая…» — сетка 3×3.
                             ChipGrid(columns = 3) {
                                 s.doseUnits.forEach { u ->
@@ -1333,7 +1366,7 @@ fun EditMedScreen(
                                     Text(s.linkPickLabel, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                                     ChipGrid(columns = 2) {
                                         otherMeds.forEach { med ->
-                                            GridChip(selected = linkedTo == med.id, label = med.name) { linkedTo = med.id }
+                                            GridChip(selected = linkedTo == med.id, label = med.name, marquee = true) { linkedTo = med.id }
                                         }
                                     }
                                     // Та же раскладка, что у смещения от подъёма: пресеты и часы/минуты, а не голые «120».
@@ -1374,7 +1407,7 @@ fun EditMedScreen(
                                     ChipGrid(columns = 2) {
                                         GridChip(selected = apartIds.isEmpty(), label = s.apartAny) { apartIds = emptySet() }
                                         otherMeds.filter { it.id != linkedTo }.forEach { other ->
-                                            GridChip(selected = other.id in apartIds, label = other.name) {
+                                            GridChip(selected = other.id in apartIds, label = other.name, marquee = true) {
                                                 apartIds = if (other.id in apartIds) apartIds - other.id else apartIds + other.id
                                             }
                                         }

@@ -37,6 +37,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,7 +73,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import tech.unispace.pillreminder.data.DoctorPreset
 import tech.unispace.pillreminder.data.DoseStatus
+import tech.unispace.pillreminder.data.Medication
+import tech.unispace.pillreminder.data.medIdsList
 import tech.unispace.pillreminder.data.Report
 import tech.unispace.pillreminder.data.TrackerType
 import tech.unispace.pillreminder.data.epochDayOf
@@ -261,15 +267,26 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
     var days by remember { mutableIntStateOf(30) }
     var sections by remember { mutableStateOf(Report.ALL_SECTIONS) }
     var report by remember { mutableStateOf("") }
+    // Таблетки отчёта: null — все (и новые тоже), иначе явный набор. Пресет врача — именованный набор.
+    var meds by remember { mutableStateOf<List<Medication>>(emptyList()) }
+    var selectedMeds by remember { mutableStateOf<Set<Long>?>(null) }
+    var presets by remember { mutableStateOf<List<DoctorPreset>>(emptyList()) }
+    var activePreset by remember { mutableStateOf<Long?>(null) }
+    var savePreset by remember { mutableStateOf(false) }
+    var presetName by remember { mutableStateOf("") }
 
-    LaunchedEffect(days, sections) { report = vm.buildReport(days, sections) }
+    LaunchedEffect(Unit) {
+        meds = vm.medsForReport()
+        presets = vm.doctorPresets()
+    }
+    LaunchedEffect(days, sections, selectedMeds) { report = vm.buildReport(days, sections, medIds = selectedMeds) }
 
     val saveTxt = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) {
             scope.launch {
                 try {
                     // В файл — без пустых разделов: печатный лист не должен быть замусорен графами «нет данных».
-                    val text = vm.buildReport(days, sections, hideEmpty = true)
+                    val text = vm.buildReport(days, sections, hideEmpty = true, medIds = selectedMeds)
                     context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
                     snackbars.showSnackbar(s.exportDone)
                 } catch (_: Exception) {
@@ -282,7 +299,7 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
         if (uri != null) {
             scope.launch {
                 try {
-                    val bytes = Report.toPdf(vm.buildReport(days, sections, hideEmpty = true))
+                    val bytes = Report.toPdf(vm.buildReport(days, sections, hideEmpty = true, medIds = selectedMeds))
                     context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                     snackbars.showSnackbar(s.exportDone)
                 } catch (_: Exception) {
@@ -321,6 +338,49 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
                     ) { Text(s.done) }
                 },
                 dismissButton = { TextButton(onClick = { customPeriod = false }) { Text(s.cancel) } },
+            )
+        }
+        if (savePreset) {
+            val exists = presets.any { it.name.trim().equals(presetName.trim(), ignoreCase = true) }
+            AlertDialog(
+                onDismissRequest = { savePreset = false },
+                title = { Text(s.repPresetSave) },
+                text = {
+                    Column {
+                        OutlinedTextField(
+                            value = presetName,
+                            onValueChange = { presetName = it },
+                            label = { Text(s.repPresetNameLabel) },
+                            singleLine = true,
+                            colors = fieldColors(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (exists) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(s.repPresetReplace, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = presetName.isNotBlank(),
+                        onClick = {
+                            val ids = selectedMeds ?: meds.map { it.id }.toSet()
+                            val same = presets.firstOrNull { it.name.trim().equals(presetName.trim(), ignoreCase = true) }
+                            savePreset = false
+                            scope.launch {
+                                // Пресет с тем же именем не плодим, а обновляем — иначе список зарастает дублями.
+                                vm.saveDoctorPreset(
+                                    DoctorPreset(id = same?.id ?: 0, name = presetName.trim(), medIds = ids.joinToString(",")),
+                                )
+                                presets = vm.doctorPresets()
+                                activePreset = presets.firstOrNull { it.name == presetName.trim() }?.id
+                                snackbars.showSnackbar(s.repPresetSaved)
+                            }
+                        },
+                    ) { Text(s.save) }
+                },
+                dismissButton = { TextButton(onClick = { savePreset = false }) { Text(s.cancel) } },
             )
         }
         ToolSection(s.reportPeriodSection) {
@@ -368,6 +428,102 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
             }
         }
 
+        ToolSection(s.repFilterSection) {
+            // Короткий гайд прямо здесь: без него неясно, зачем снимать галочки и что даёт пресет.
+            Text(s.repFilterGuide, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val allIds = meds.map { it.id }
+            val selected = selectedMeds ?: allIds.toSet()
+            if (presets.isNotEmpty()) {
+                Text(s.repPresetsTitle, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    presets.forEach { preset ->
+                        InputChip(
+                            selected = activePreset == preset.id,
+                            onClick = {
+                                // Таблетку могли удалить — в пресете остаются только существующие id.
+                                selectedMeds = preset.medIdsList().filter { it in allIds }.toSet()
+                                activePreset = preset.id
+                            },
+                            label = { Text(preset.name, maxLines = 1) },
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = s.delete,
+                                    modifier = Modifier.size(18.dp).clickable {
+                                        scope.launch {
+                                            vm.deleteDoctorPreset(preset.id)
+                                            presets = vm.doctorPresets()
+                                            if (activePreset == preset.id) activePreset = null
+                                            snackbars.currentSnackbarData?.dismiss()
+                                            val result = snackbars.showSnackbar(s.repPresetRemoved, actionLabel = s.undo)
+                                            if (result == SnackbarResult.ActionPerformed) {
+                                                vm.saveDoctorPreset(preset.copy(id = 0))
+                                                presets = vm.doctorPresets()
+                                            }
+                                        }
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { selectedMeds = null; activePreset = null },
+                    modifier = Modifier.weight(1f),
+                ) { Text(s.repFilterAll, maxLines = 1, softWrap = false) }
+                OutlinedButton(
+                    onClick = { selectedMeds = emptySet(); activePreset = null },
+                    modifier = Modifier.weight(1f),
+                ) { Text(s.repFilterNone, maxLines = 1, softWrap = false) }
+            }
+            Column {
+                meds.forEach { med ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable {
+                            selectedMeds = if (med.id in selected) selected - med.id else selected + med.id
+                            activePreset = null
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = med.id in selected,
+                            onCheckedChange = {
+                                selectedMeds = if (it) selected + med.id else selected - med.id
+                                activePreset = null
+                            },
+                        )
+                        MarqueeText(med.name, modifier = Modifier.weight(1f))
+                        if (!med.active) {
+                            Text(
+                                s.repArchivedMark,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                }
+            }
+            Text(
+                s.repFilterCount(selected.size, allIds.size),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (selected.isEmpty() && meds.isNotEmpty()) {
+                Text(s.repFilterEmpty, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            OutlinedButton(
+                onClick = {
+                    presetName = ""
+                    savePreset = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(s.repPresetSave, maxLines = 1, softWrap = false) }
+        }
+
         ToolSection(s.reportExportTitle) {
         // Файлы в одну строку, отправка — отдельной строкой под ними.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -383,7 +539,7 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
         FilledTonalButton(
             onClick = {
                 scope.launch {
-                    val text = vm.buildReport(days, sections, hideEmpty = true)
+                    val text = vm.buildReport(days, sections, hideEmpty = true, medIds = selectedMeds)
                     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
                     context.startActivity(Intent.createChooser(send, s.reportShare))
                 }

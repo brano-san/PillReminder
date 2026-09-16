@@ -30,6 +30,7 @@ import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.Medication
 import tech.unispace.pillreminder.data.DoctorVisit
+import tech.unispace.pillreminder.data.DoctorPreset
 import tech.unispace.pillreminder.data.MedLibraryEntry
 import tech.unispace.pillreminder.data.Note
 import tech.unispace.pillreminder.data.Report
@@ -469,9 +470,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onDone(outcome)
     }
 
-    /** [hideEmpty] — для файла и отправки: разделы «нет данных» не печатаются; предпросмотр их показывает. */
-    suspend fun buildReport(days: Int, sections: Set<String>, hideEmpty: Boolean = false): String =
-        Report.build(db, days, Lang.s, sections, hideEmpty)
+    /**
+     * [hideEmpty] — для файла и отправки: разделы «нет данных» не печатаются; предпросмотр их показывает.
+     * [medIds] — таблетки, о которых говорят с этим врачом; null — все.
+     */
+    suspend fun buildReport(days: Int, sections: Set<String>, hideEmpty: Boolean = false, medIds: Set<Long>? = null): String =
+        Report.build(db, days, Lang.s, sections, hideEmpty, medIds)
+
+    /** Все таблетки для выбора в отчёте: сначала активные, архивные — следом (о них тоже спрашивают врача). */
+    suspend fun medsForReport(): List<Medication> = db.medicationDao().getAllIncludingInactive()
+        .sortedWith(compareByDescending<Medication> { it.active }.thenBy { it.sortOrder }.thenBy { it.id })
+
+    suspend fun doctorPresets(): List<DoctorPreset> = db.doctorPresetDao().getAll()
+
+    suspend fun saveDoctorPreset(preset: DoctorPreset) {
+        db.doctorPresetDao().upsert(preset)
+    }
+
+    suspend fun deleteDoctorPreset(id: Long) = db.doctorPresetDao().delete(id)
 
     // ---------- Действия ----------
 
