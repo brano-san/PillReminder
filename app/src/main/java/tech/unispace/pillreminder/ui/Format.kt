@@ -25,3 +25,14 @@ fun formatDay(epochDay: Long): String {
 fun formatCountdown(deltaMs: Long): String = Lang.s.countdown(deltaMs)
 
 fun formatDuration(minutes: Int): String = Lang.s.duration(minutes)
+
+/**
+ * Число таблеток или доз для показа: не больше двух знаков после запятой, без хвостовых нулей,
+ * с разделителем языка приложения. Без округления остаток после нескольких списаний по 0,1
+ * превращался в «9.400000000000002», а точка стояла даже в русском интерфейсе.
+ */
+fun trimNumber(value: Double): String {
+    val rounded = Math.round(value * 100.0) / 100.0
+    val text = if (rounded % 1.0 == 0.0) rounded.toLong().toString() else rounded.toString().trimEnd('0').trimEnd('.')
+    return text.replace('.', java.text.DecimalFormatSymbols(Lang.s.locale).decimalSeparator)
+}

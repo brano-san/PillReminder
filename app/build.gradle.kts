@@ -21,8 +21,9 @@ android {
         applicationId = "tech.unispace.pillreminder"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.2.4"
+        versionCode = 9
+        versionName = "1.3.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -93,4 +94,11 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
+    // Инструментальные тесты: миграции базы и круговорот бэкапа проверяются на устройстве.
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    // Настоящий org.json вместо заглушки: логику бэкапа надо проверять юнит-тестами, а не на устройстве.
+    testImplementation("org.json:json:20240303")
 }

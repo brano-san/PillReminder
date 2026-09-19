@@ -46,7 +46,10 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Inventory
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.Palette
@@ -58,6 +61,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -67,6 +71,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -102,6 +107,8 @@ import tech.unispace.pillreminder.alarm.AlarmActivity
 import tech.unispace.pillreminder.alarm.AlarmScheduler
 import tech.unispace.pillreminder.alarm.Notifications
 import tech.unispace.pillreminder.alarm.VISIT_OFFSET_PRESETS
+import tech.unispace.pillreminder.data.Medication
+import tech.unispace.pillreminder.ui.theme.ThemeMode
 import tech.unispace.pillreminder.widget.PillWidgetProvider
 import tech.unispace.pillreminder.data.Settings as AppSettings
 import java.time.LocalTime
@@ -150,6 +157,8 @@ fun SettingsMenuScreen(
     onOpenReport: () -> Unit,
     onOpenTutorial: () -> Unit,
     onOpenWidget: () -> Unit,
+    onOpenTips: () -> Unit,
+    onOpenArchive: () -> Unit,
 ) {
     val s = Lang.s
     val context = LocalContext.current
@@ -168,10 +177,14 @@ fun SettingsMenuScreen(
         Spacer(Modifier.height(8.dp))
         Text(s.settingsTitle, style = MaterialTheme.typography.titleLarge)
 
+        // Пункты сгруппированы: «Повторы напоминаний» прятали в себе тихие часы, «Отложить»
+        // и напоминание «Подъём», а список из двенадцати одинаковых карточек читался наугад.
+        SettingsGroup(s.setGroupReminders)
         SettingsNavCard(
             icon = { Icon(Icons.Default.Repeat, contentDescription = null, tint = primary) },
             title = s.repeatsCard,
-            subtitle = if (settings.repeatEnabled) s.repeatsOn(settings.repeatIntervalMinutes, settings.repeatCount) else s.repeatsOff,
+            subtitle = (if (settings.repeatEnabled) s.repeatsOn(settings.repeatIntervalMinutes, settings.repeatCount) else s.repeatsOff) +
+                " · " + s.repeatsCardMore,
             onClick = onOpenRepeats,
         )
         SettingsNavCard(
@@ -199,6 +212,14 @@ fun SettingsMenuScreen(
             subtitle = s.visitsCardSub(settings.visitOffsetsMinutes.size),
             onClick = onOpenVisits,
         )
+
+        SettingsGroup(s.setGroupPills)
+        SettingsNavCard(
+            icon = { Icon(Icons.Default.Inventory2, contentDescription = null, tint = primary) },
+            title = s.archiveCard,
+            subtitle = s.archiveCardSub,
+            onClick = onOpenArchive,
+        )
         SettingsNavCard(
             icon = { Icon(Icons.Default.Shield, contentDescription = null, tint = primary) },
             title = s.privacyCard,
@@ -213,12 +234,8 @@ fun SettingsMenuScreen(
             subtitle = s.stockCardSub(settings.lowStockThreshold),
             onClick = onOpenStock,
         )
-        SettingsNavCard(
-            icon = { Icon(Icons.Default.Palette, contentDescription = null, tint = primary) },
-            title = s.appearanceCard,
-            subtitle = s.appearanceCardSub,
-            onClick = onOpenCharts,
-        )
+
+        SettingsGroup(s.setGroupData)
         SettingsNavCard(
             icon = { Icon(Icons.Default.Save, contentDescription = null, tint = primary) },
             title = s.backupCard,
@@ -231,19 +248,43 @@ fun SettingsMenuScreen(
             subtitle = s.reportCardSub,
             onClick = onOpenReport,
         )
-        SettingsNavCard(
-            icon = { Icon(Icons.Default.School, contentDescription = null, tint = primary) },
-            title = s.tutorialCard,
-            subtitle = s.tutorialCardSub,
-            onClick = onOpenTutorial,
-        )
 
+        SettingsGroup(s.setGroupApp)
+        SettingsNavCard(
+            icon = { Icon(Icons.Default.Palette, contentDescription = null, tint = primary) },
+            title = s.appearanceCard,
+            subtitle = s.appearanceCardSub,
+            onClick = onOpenCharts,
+        )
         // Виджет — такой же пункт со стрелкой, как остальные; добавление и стиль живут на своём экране.
         SettingsNavCard(
             icon = { Icon(Icons.Default.Widgets, contentDescription = null, tint = primary) },
             title = s.widgetCard,
             subtitle = s.widgetCardSub,
             onClick = onOpenWidget,
+        )
+        SettingsNavCard(
+            icon = { Icon(Icons.Default.School, contentDescription = null, tint = primary) },
+            title = s.tutorialCard,
+            subtitle = s.tutorialCardSub,
+            onClick = onOpenTutorial,
+        )
+        // Советы жили только в блоке кнопок на главной — а его можно выключить, и они пропадали совсем.
+        SettingsNavCard(
+            icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = primary) },
+            title = s.tipsCard,
+            subtitle = s.tipsCardSub,
+            onClick = onOpenTips,
+        )
+
+        // «Что нового» — обычным пунктом меню: нажатие на строку версии внизу экрана
+        // тоже работает, но найти его без подсказки было невозможно.
+        var showChangelog by remember { mutableStateOf(false) }
+        SettingsNavCard(
+            icon = { Icon(Icons.Default.NewReleases, contentDescription = null, tint = primary) },
+            title = s.changelogCard,
+            subtitle = s.changelogCardSub,
+            onClick = { showChangelog = true },
         )
 
         // Язык — переключается на месте.
@@ -277,18 +318,19 @@ fun SettingsMenuScreen(
                 ""
             }
         }
-        // История версий спрятана под нажатием на версию — отдельного пункта меню она не стоит.
-        var showChangelog by remember { mutableStateOf(false) }
         if (showChangelog) {
             AlertDialog(
                 onDismissRequest = { showChangelog = false },
                 title = { Text(s.changelogTitle) },
                 text = {
+                    // Сначала — только последний релиз: восемь версий и восемьдесят пунктов
+                    // в одном окне читать невозможно, а интересна обычно свежая.
+                    var allVersions by remember { mutableStateOf(false) }
                     Column(
                         Modifier.verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        CHANGELOG.forEach { release ->
+                        (if (allVersions) CHANGELOG else CHANGELOG.take(1)).forEach { release ->
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
                                     release.version + " · " + release.date.ifBlank { s.versionUnreleased },
@@ -299,6 +341,9 @@ fun SettingsMenuScreen(
                                     Text("• " + line, style = MaterialTheme.typography.bodySmall)
                                 }
                             }
+                        }
+                        if (!allVersions && CHANGELOG.size > 1) {
+                            TextButton(onClick = { allVersions = true }) { Text(s.changelogShowAll) }
                         }
                     }
                 },
@@ -314,6 +359,17 @@ fun SettingsMenuScreen(
         )
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/** Заголовок группы пунктов настроек: без них двенадцать одинаковых карточек читались списком без смысла. */
+@Composable
+private fun SettingsGroup(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+    )
 }
 
 @Composable
@@ -392,6 +448,9 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
     var wakeRemind by remember { mutableStateOf(settings.wakeReminderEnabled) }
     var wakeRemindAt by remember { mutableIntStateOf(settings.wakeReminderMinutes) }
     var showWakePicker by remember { mutableStateOf(false) }
+    var notifyLowStock by remember { mutableStateOf(settings.notifyLowStock) }
+    var notifyCourseDone by remember { mutableStateOf(settings.notifyCourseDone) }
+    var notifyDayDone by remember { mutableStateOf(settings.notifyDayDone) }
     val snackbars = remember { SnackbarHostState() }
 
     if (showWakePicker) {
@@ -485,11 +544,18 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                 var snoozeSet by remember { mutableStateOf(settings.snoozeOptions.toSet()) }
                 Text(s.snoozeOptionsTitle, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(6.dp))
-                Text(s.snoozeOptionsBody, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    s.snoozeOptionsBody + " " + s.snoozeAtLeastOne,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(5, 10, 15, 30, 60, 120).forEach { m ->
+                        // Последний включённый вариант не снимается: кнопке «Отложить» нужен хотя бы один.
+                        val last = snoozeSet.size == 1 && m in snoozeSet
                         FilterChip(
+                            enabled = !last,
                             selected = m in snoozeSet,
                             onClick = {
                                 val next = if (m in snoozeSet) snoozeSet - m else snoozeSet + m
@@ -571,6 +637,29 @@ fun RepeatSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
                     OutlinedButton(onClick = { showWakePicker = true }, modifier = Modifier.fillMaxWidth()) {
                         Text(s.wakeRemindTime + ": " + hhmm(wakeRemindAt))
                     }
+                }
+            }
+        }
+
+        // Служебные уведомления: напоминания о приёмах выключать нельзя (ради них приложение
+        // и существует), а вот эти три человек вправе отключить, не отключая всё подряд.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text(s.notifySection, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                SwitchRow(s.notifyLowStockTitle, s.stockCardSub(settings.lowStockThreshold), notifyLowStock) {
+                    notifyLowStock = it
+                    settings.notifyLowStock = it
+                }
+                Spacer(Modifier.height(12.dp))
+                SwitchRow(s.notifyCourseDoneTitle, s.courseDoneBodyPrivate, notifyCourseDone) {
+                    notifyCourseDone = it
+                    settings.notifyCourseDone = it
+                }
+                Spacer(Modifier.height(12.dp))
+                SwitchRow(s.notifyDayDoneTitle, s.dayDoneBody, notifyDayDone) {
+                    notifyDayDone = it
+                    settings.notifyDayDone = it
                 }
             }
         }
@@ -677,7 +766,7 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                             Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
                                 .setData(Uri.parse("package:" + context.packageName)),
                             context,
-                        )
+                        ) { say(it) }
                     } else {
                         fullScreenAlarm = on
                         settings.fullScreenAlarm = on
@@ -716,7 +805,7 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                                     launcher,
                                     Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName)),
                                     context,
-                                )
+                                ) { say(it) }
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(s.overlayAllow, maxLines = 1, softWrap = false) }
@@ -896,14 +985,20 @@ fun VisitReminderSettingsScreen(onBack: () -> Unit, vm: MainViewModel) {
  * Системный запрос отпечатка или кода устройства. Если экран открыт не из активити
  * (теоретически невозможно, но проверка дешёвая) — действие выполняется без запроса.
  */
-fun promptDeviceLock(context: Context, onSuccess: () -> Unit) {
-    val activity = context as? FragmentActivity ?: return onSuccess()
+fun promptDeviceLock(context: Context, onError: (String) -> Unit = {}, onSuccess: () -> Unit) {
+    // Проверка входа не имеет права «пропустить» при неожиданном контексте: это защита медицинских данных.
+    val activity = context as? FragmentActivity ?: return onError(Lang.s.lockCheckFailed)
     val prompt = BiometricPrompt(
         activity,
         ContextCompat.getMainExecutor(activity),
         object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 onSuccess()
+            }
+
+            // Сняли код блокировки, слишком много попыток — пользователь должен это увидеть.
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                onError(errString.toString())
             }
         },
     )
@@ -952,7 +1047,15 @@ fun PrivacySettingsScreen(onBack: () -> Unit) {
                         scope.launch { snackbars.showSnackbar(s.lockUnavailable) }
                     } else {
                         // Проверяем палец сразу: и наглядно при включении, и защита от чужих рук при выключении.
-                        promptDeviceLock(context) {
+                        promptDeviceLock(
+                            context,
+                            onError = { message ->
+                                scope.launch {
+                                    snackbars.currentSnackbarData?.dismiss()
+                                    snackbars.showSnackbar(message)
+                                }
+                            },
+                        ) {
                             appLock = on
                             settings.appLockEnabled = on
                         }
@@ -986,11 +1089,13 @@ fun StockSettingsScreen(onBack: () -> Unit) {
     SettingsSubScreen(s.stockCard, onBack, snackbars) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                Text(s.lowStockTitle, fontWeight = FontWeight.SemiBold)
+                // Заголовок — про настройку, а не текст будущего уведомления: «Таблетки заканчиваются»
+                // здесь читалось как тревога, хотя это экран порога.
+                Text(s.stockThresholdTitle, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Text(s.thresholdLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(10.dp))
-                // Степпер: число между «−» и «+» вводится и с цифровой клавиатуры; чипы прибавляют.
+                // Степпер: число между «−» и «+» вводится и с цифровой клавиатуры; чипы задают его сразу.
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     OutlinedIconButton(onClick = { setThreshold(threshold - 1) }, enabled = threshold > 1, modifier = Modifier.size(44.dp)) {
                         Icon(Icons.Default.Remove, contentDescription = s.stepDown)
@@ -1017,7 +1122,7 @@ fun StockSettingsScreen(onBack: () -> Unit) {
                     }
                 }
                 Text(
-                    s.thresholdShort + " " + s.rangeHint(1, 100),
+                    s.thresholdFieldHint(1, 100),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -1029,8 +1134,14 @@ fun StockSettingsScreen(onBack: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
+                    // Чипы задают порог, а не прибавляют к нему: «+3» рядом с числом читалось
+                    // как выбор значения, и два нажатия давали 6 вместо 3.
                     listOf(3, 5, 10, 20).forEach { n ->
-                        AssistChip(onClick = { setThreshold(threshold + n) }, label = { Text("+$n") })
+                        FilterChip(
+                            selected = threshold == n,
+                            onClick = { setThreshold(n) },
+                            label = { Text(n.toString(), maxLines = 1, softWrap = false) },
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -1052,9 +1163,36 @@ fun ChartSettingsScreen(onBack: () -> Unit) {
     var homeActions by remember { mutableStateOf(settings.showHomeActions) }
     var timeline by remember { mutableStateOf(settings.showDayTimeline) }
     var smooth by remember { mutableStateOf(settings.chartSmooth) }
+    var theme by remember { mutableStateOf(settings.theme) }
     val snackbars = remember { SnackbarHostState() }
 
     SettingsSubScreen(s.appearanceCard, onBack, snackbars) {
+        // Тема: раньше приложение слепо следовало системе, и светлую тему днём было не получить.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text(s.themeSection, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(
+                        AppSettings.THEME_SYSTEM to s.themeSystem,
+                        AppSettings.THEME_LIGHT to s.themeLight,
+                        AppSettings.THEME_DARK to s.themeDark,
+                    ).forEach { (code, label) ->
+                        FilterChip(
+                            selected = theme == code,
+                            onClick = {
+                                theme = code
+                                settings.theme = code
+                                // Экран перекрашивается сразу: значение живёт в памяти процесса.
+                                ThemeMode.code = code
+                            },
+                            label = { Text(label, maxLines = 1, softWrap = false) },
+                        )
+                    }
+                }
+            }
+        }
+
         // Главный экран: режим карточек, ряд кнопок, схема дня — всё, что про него, в одной карточке.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -1149,7 +1287,7 @@ fun DeliverySettingsScreen(onBack: () -> Unit) {
         refresh++
         // После двух отказов система молча не показывает диалог — ведём в системные настройки, иначе кнопка «не работает».
         if (!granted && !notificationsEnabled(context)) {
-            safeLaunch(launcher, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName), context)
+            safeLaunch(launcher, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName), context) { say(it) }
         }
     }
 
@@ -1157,7 +1295,7 @@ fun DeliverySettingsScreen(onBack: () -> Unit) {
     val exactAlarmsOn = remember(refresh) { exactAlarmsAllowed(context) }
     val batteryOk = remember(refresh) { isBatteryUnrestricted(context) }
     val dndOk = remember(refresh) { hasDndAccess(context) }
-    val open: (Intent) -> Unit = { safeLaunch(launcher, it, context) }
+    val open: (Intent) -> Unit = { safeLaunch(launcher, it, context) { message -> say(message) } }
 
     SettingsSubScreen(s.deliveryTitle, onBack, snackbars) {
         Text(s.deliveryIntro, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1216,12 +1354,92 @@ fun DeliverySettingsScreen(onBack: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text(s.checkAgain) }
 
-        Text(
-            Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE +
-                " (API " + Build.VERSION.SDK_INT + ")\n" + s.diag(notificationsOn, exactAlarmsOn, batteryOk, dndOk),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Строка с моделью телефона и статусами нужна для разбора жалоб, а не человеку каждый
+        // день — поэтому она под кнопкой, а не висит внизу экрана постоянно.
+        var showDiag by remember { mutableStateOf(false) }
+        if (showDiag) {
+            Text(
+                Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE +
+                    " (API " + Build.VERSION.SDK_INT + ")\n" + s.diag(notificationsOn, exactAlarmsOn, batteryOk, dndOk),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            TextButton(onClick = { showDiag = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(s.showDiag, maxLines = 1, softWrap = false)
+            }
+        }
+    }
+}
+
+// ---------- Архив таблеток ----------
+
+/**
+ * Снятые с расписания таблетки. Раньше их не было видно нигде: курс кончался, карточка исчезала
+ * с главной, и вернуть её можно было только заведя таблетку заново.
+ */
+@Composable
+fun ArchiveScreen(vm: MainViewModel, onBack: () -> Unit) {
+    val s = Lang.s
+    val archived by vm.archived.collectAsState()
+    val snackbars = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var purgeTarget by remember { mutableStateOf<Medication?>(null) }
+
+    purgeTarget?.let { med ->
+        AlertDialog(
+            onDismissRequest = { purgeTarget = null },
+            title = { Text(med.name) },
+            text = { Text(s.archivePurgeConfirm) },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.purgeFromArchive(med.id)
+                    purgeTarget = null
+                }) { Text(s.archivePurge) }
+            },
+            dismissButton = { TextButton(onClick = { purgeTarget = null }) { Text(s.cancel) } },
         )
+    }
+
+    SettingsSubScreen(s.archiveCard, onBack, snackbars) {
+        if (archived.isEmpty()) {
+            Text(
+                s.archiveEmpty,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@SettingsSubScreen
+        }
+        Text(s.archiveRestoreHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        archived.forEach { med ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    MarqueeText(med.name, fontWeight = FontWeight.SemiBold)
+                    if (med.doseInfo.isNotBlank() || med.form.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            listOf(s.formName(med.form), med.doseInfo).filter { it.isNotBlank() }.joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = {
+                            vm.restoreFromArchive(med.id)
+                            scope.launch {
+                                snackbars.currentSnackbarData?.dismiss()
+                                snackbars.showSnackbar(s.archiveRestored)
+                            }
+                        }) { Text(s.archiveRestore, maxLines = 1, softWrap = false) }
+                        TextButton(
+                            onClick = { purgeTarget = med },
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        ) { Text(s.archivePurge, maxLines = 1, softWrap = false) }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1275,14 +1493,20 @@ private fun StepCard(done: Boolean?, title: String, body: String, action: String
  * Не у всех оболочек есть экран под конкретный системный интент — на Samsung, например,
  * страницы точных будильников может не быть вовсе. Без запасного варианта это падение.
  */
-private fun safeLaunch(launcher: ActivityResultLauncher<Intent>, intent: Intent, context: Context) {
+private fun safeLaunch(
+    launcher: ActivityResultLauncher<Intent>,
+    intent: Intent,
+    context: Context,
+    /** Открыть нечего: раньше нажатие просто ничего не делало, и это выглядело поломкой. */
+    onFail: (String) -> Unit = {},
+) {
     try {
         launcher.launch(intent)
     } catch (_: ActivityNotFoundException) {
         try {
             launcher.launch(appDetailsSettings(context))
         } catch (_: ActivityNotFoundException) {
-            // Совсем некуда вести — оставляем пользователя на месте.
+            onFail(Lang.s.systemScreenMissing)
         }
     }
 }

@@ -86,22 +86,30 @@ fun WidgetSettingsScreen(onBack: () -> Unit) {
     var pickWidget by remember { mutableStateOf(false) }
     if (pickWidget) {
         // Вариантов виджета два — даём выбрать, какой закрепить.
+        // Оба варианта — в теле диалога, кнопка снизу одна и она отменяет: раньше обе видимые
+        // кнопки закрепляли виджет, и отменить можно было только промахом мимо окна.
         AlertDialog(
             onDismissRequest = { pickWidget = false },
             title = { Text(s.pickWidgetTitle) },
-            text = null,
-            confirmButton = {
-                TextButton(onClick = {
-                    pickWidget = false
-                    manager.requestPinAppWidget(ComponentName(context, PillWidgetWideProvider::class.java), null, null)
-                }) { Text(s.widgetWideName, maxLines = 1, softWrap = false) }
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(
+                        onClick = {
+                            pickWidget = false
+                            manager.requestPinAppWidget(ComponentName(context, PillWidgetWideProvider::class.java), null, null)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(s.widgetWideName, maxLines = 1, softWrap = false) }
+                    FilledTonalButton(
+                        onClick = {
+                            pickWidget = false
+                            manager.requestPinAppWidget(ComponentName(context, PillWidgetProvider::class.java), null, null)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(s.widgetNarrowName, maxLines = 1, softWrap = false) }
+                }
             },
-            dismissButton = {
-                TextButton(onClick = {
-                    pickWidget = false
-                    manager.requestPinAppWidget(ComponentName(context, PillWidgetProvider::class.java), null, null)
-                }) { Text(s.widgetNarrowName, maxLines = 1, softWrap = false) }
-            },
+            confirmButton = { TextButton(onClick = { pickWidget = false }) { Text(s.cancel) } },
         )
     }
 

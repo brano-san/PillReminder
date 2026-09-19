@@ -19,6 +19,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PriorityHigh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
@@ -43,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.OVERDUE_GRACE_MS
+import tech.unispace.pillreminder.data.snoozedUntil
 
 /** Что за узел на схеме дня. */
 enum class TimelineKind { WAKE, PILL, MEAL, BED }
@@ -80,9 +85,6 @@ fun timelinePillLabel(name: String, doseInfo: String): String {
         else -> trimmed.take(6) + "…"
     }
 }
-
-/** Отложен кнопкой «Отложить»: момент назначен и ещё впереди, а цепочка повторов не начиналась. */
-fun Dose.snoozedUntil(now: Long): Long? = remindAt?.takeIf { attempt == 0 && it > now && plannedAt <= now }
 
 /**
  * Узлы схемы дня по времени: подъём, приёмы (выпитые — по факту, остальные — по плану),
@@ -205,11 +207,24 @@ private fun TimelineNodeView(node: TimelineNode, past: Boolean, header: Dp, onTa
         TimelineState.PENDING -> scheme.primary
         TimelineState.NONE -> scheme.onPrimaryContainer
     }
-    val icon = when (node.kind) {
-        TimelineKind.WAKE -> Icons.Default.WbSunny
-        TimelineKind.MEAL -> Icons.Default.Restaurant
-        TimelineKind.BED -> Icons.Default.Bedtime
-        TimelineKind.PILL -> formIcon(node.form)
+    // Состояние различается не только оттенком: зелёный и красный — классическая пара для дальтонизма.
+    val icon = when {
+        node.kind == TimelineKind.WAKE -> Icons.Default.WbSunny
+        node.kind == TimelineKind.MEAL -> Icons.Default.Restaurant
+        node.kind == TimelineKind.BED -> Icons.Default.Bedtime
+        node.state == TimelineState.TAKEN -> Icons.Default.Check
+        node.state == TimelineState.OVERDUE -> Icons.Default.PriorityHigh
+        node.state == TimelineState.DUE -> Icons.Default.Schedule
+        node.state == TimelineState.SKIPPED -> Icons.Default.Close
+        else -> formIcon(node.form)
+    }
+    val stateWord = when (node.state) {
+        TimelineState.TAKEN -> s.timelineStateTaken
+        TimelineState.DUE -> s.timelineStateDue
+        TimelineState.OVERDUE -> s.timelineStateOverdue
+        TimelineState.SKIPPED -> s.timelineStateSkipped
+        TimelineState.PENDING -> s.timelineStatePending
+        TimelineState.NONE -> ""
     }
     // Короткие подписи специально для схемы: «Отход ко сну» из журнала в 64 dp не помещается.
     val label = when (node.kind) {
@@ -224,13 +239,20 @@ private fun TimelineNodeView(node: TimelineNode, past: Boolean, header: Dp, onTa
         .then(if (node.state == TimelineState.PENDING) Modifier.border(2.dp, scheme.primary, CircleShape) else Modifier)
         .then(if (node.kind == TimelineKind.PILL && node.medId > 0) Modifier.clickable { onTap(node.medId) } else Modifier)
 
+    // Ширина растёт вместе с системным шрифтом: иначе при 200 % в колонку влезает три символа.
+    val width = with(LocalDensity.current) { (MaterialTheme.typography.labelSmall.fontSize.toDp() * 5.2f).coerceAtLeast(NODE_WIDTH) }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.width(NODE_WIDTH).alpha(if (past) 0.65f else 1f),
+        modifier = Modifier.width(width).alpha(if (past) 0.65f else 1f),
     ) {
         Spacer(Modifier.height(header))
         Box(circle, contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = label, tint = content, modifier = Modifier.size(18.dp))
+            Icon(
+                icon,
+                contentDescription = listOf(label, stateWord, formatClock(node.at)).filter { it.isNotBlank() }.joinToString(", "),
+                tint = content,
+                modifier = Modifier.size(18.dp),
+            )
         }
         Spacer(Modifier.height(4.dp))
         Text(formatClock(node.at), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)

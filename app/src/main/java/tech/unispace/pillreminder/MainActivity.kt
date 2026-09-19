@@ -1,8 +1,10 @@
 package tech.unispace.pillreminder
 
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import android.view.WindowManager
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -61,6 +64,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.ui.AdherenceState
+import tech.unispace.pillreminder.ui.ArchiveScreen
 import tech.unispace.pillreminder.ui.BackupScreen
 import tech.unispace.pillreminder.ui.ChartSettingsScreen
 import tech.unispace.pillreminder.ui.CorrelationScreen
@@ -91,16 +95,44 @@ import tech.unispace.pillreminder.ui.VisitReminderSettingsScreen
 import tech.unispace.pillreminder.ui.WidgetSettingsScreen
 import tech.unispace.pillreminder.ui.theme.PillTheme
 
+/**
+ * Открыт ли замок. Живёт в памяти процесса: `rememberSaveable` переживал бы и уход в фон,
+ * и смерть процесса, то есть замок открывался бы один раз навсегда.
+ */
+object LockState {
+    var unlocked by mutableStateOf(false)
+}
+
 class MainActivity : FragmentActivity() {
 
+    companion object {
+        /** «Курс закончился» из шторки открывает экран архива, а не просто главный. */
+        const val EXTRA_OPEN_ARCHIVE = "open_archive"
+    }
+
+    /** Запрошенный из уведомления экран; читается один раз при запуске и при новом интенте. */
+    private var openArchive by mutableStateOf(false)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_ARCHIVE, false)) openArchive = true
+    }
+
     /** Системный запрос отпечатка или кода устройства. */
-    private fun askUnlock(onSuccess: () -> Unit) {
+    private fun askUnlock(onError: (String) -> Unit = {}, onSuccess: () -> Unit) {
         val prompt = BiometricPrompt(
             this,
             ContextCompat.getMainExecutor(this),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     onSuccess()
+                }
+
+                // Без обработки ошибки экран замка молчал: если на устройстве убрали код блокировки,
+                // выйти из приложения было нельзя вообще — только очистить данные.
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    onError(errString.toString())
                 }
             },
         )
@@ -114,29 +146,51 @@ class MainActivity : FragmentActivity() {
         )
     }
 
-    private val notificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    override fun onStart() {
+        super.onStart()
+        // Замок закрывается снова, как только приложение уходило с экрана: иначе достаточно один раз
+        // приложить палец, и дальше медкарта открыта любому, кто возьмёт разблокированный телефон.
+        if (!Settings(this).appLockEnabled) LockState.unlocked = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (Settings(this).appLockEnabled) LockState.unlocked = false
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // При включённом замке экран не попадает в снимок недавних задач и в скриншоты.
+        if (Settings(this).appLockEnabled) {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-        }
-
         val settings = Settings(this)
+        openArchive = intent?.getBooleanExtra(EXTRA_OPEN_ARCHIVE, false) == true
         setContent {
             PillTheme {
                 // Заливка на всё окно: иначе при открытой клавиатуре внизу видна полоса фона окна.
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     // Медицинские данные: при включённом замке экран открывается только после проверки.
-                    var unlocked by rememberSaveable { mutableStateOf(!settings.appLockEnabled) }
-                    if (unlocked) {
-                        AppRoot()
+                    // Состояние замка живёт в памяти процесса, а не в saved state: иначе «уже разблокировано»
+                    // переживало бы даже смерть процесса и возврат из недавних задач.
+                    if (!settings.appLockEnabled) LockState.unlocked = true
+                    var lockError by remember { mutableStateOf<String?>(null) }
+                    if (LockState.unlocked) {
+                        AppRoot(openArchive = openArchive, onArchiveShown = { openArchive = false })
                     } else {
-                        LockScreen(onUnlock = { askUnlock { unlocked = true } })
-                        LaunchedEffect(Unit) { askUnlock { unlocked = true } }
+                        LockScreen(
+                            error = lockError,
+                            onUnlock = { askUnlock(onError = { lockError = it }) { LockState.unlocked = true } },
+                        )
+                        LaunchedEffect(Unit) { askUnlock(onError = { lockError = it }) { LockState.unlocked = true } }
                     }
                 }
             }
@@ -146,7 +200,7 @@ class MainActivity : FragmentActivity() {
 
 /** Заглушка вместо содержимого, пока приложение заблокировано. */
 @Composable
-private fun LockScreen(onUnlock: () -> Unit) {
+private fun LockScreen(error: String?, onUnlock: () -> Unit) {
     val s = Lang.s
     Column(
         Modifier.fillMaxSize().padding(32.dp),
@@ -156,8 +210,14 @@ private fun LockScreen(onUnlock: () -> Unit) {
         Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(16.dp))
         Text(s.lockPrompt, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        if (error != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(4.dp))
+            Text(s.lockErrorHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        }
         Spacer(Modifier.height(24.dp))
-        Button(onClick = onUnlock) { Text(s.lockUnlock) }
+        Button(onClick = onUnlock) { Text(if (error != null) s.lockRetry else s.lockUnlock) }
     }
 }
 
@@ -187,9 +247,10 @@ private const val ROUTE_SETUP_CHARTS = "setup/charts"
 private const val ROUTE_SETUP_BACKUP = "setup/backup"
 private const val ROUTE_SETUP_REPORT = "setup/report"
 private const val ROUTE_SETUP_WIDGET = "setup/widget"
+private const val ROUTE_SETUP_ARCHIVE = "setup/archive"
 
 @Composable
-private fun AppRoot() {
+private fun AppRoot(openArchive: Boolean = false, onArchiveShown: () -> Unit = {}) {
     val vm: MainViewModel = viewModel()
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
@@ -199,6 +260,28 @@ private fun AppRoot() {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val startRoute = remember { if (settings.tutorialSeen) ROUTE_HOME else ROUTE_ONBOARDING }
+
+    // Разрешение на уведомления спрашиваем после туториала: раньше системный запрос приходил
+    // поверх первого слайда, до объяснения, зачем он нужен. Отказ не теряется — главный экран
+    // показывает карточку «уведомления не дойдут», а чек-лист доставки ведёт в системные настройки.
+    var askNotifications by rememberSaveable { mutableStateOf(false) }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+    LaunchedEffect(Unit) { if (settings.tutorialSeen) askNotifications = true }
+
+    // «Курс закончился» из шторки ведёт прямо в архив: там видно, что убралось, и можно вернуть.
+    LaunchedEffect(openArchive) {
+        if (openArchive) {
+            nav.navigate(ROUTE_SETUP_ARCHIVE)
+            onArchiveShown()
+        }
+    }
+    LaunchedEffect(askNotifications) {
+        if (askNotifications && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -229,6 +312,7 @@ private fun AppRoot() {
                 OnboardingScreen(
                     onFinish = {
                         settings.tutorialSeen = true
+                        askNotifications = true
                         if (nav.previousBackStackEntry == null) {
                             nav.navigate(ROUTE_HOME) { popUpTo(ROUTE_ONBOARDING) { inclusive = true } }
                         } else {
@@ -239,6 +323,7 @@ private fun AppRoot() {
             }
             composable(ROUTE_HOME) {
                 val state by vm.home.collectAsState()
+                val savedMedName by vm.savedMedName.collectAsState()
                 val sleepToRate by vm.sleepToRate.collectAsState()
                 val trackerRows by vm.trackerRows.collectAsState()
                 HomeScreen(
@@ -264,7 +349,11 @@ private fun AppRoot() {
                     onOpenTutorial = { nav.navigate(ROUTE_ONBOARDING) },
                     onOpenReport = { nav.navigate(ROUTE_SETUP_REPORT) },
                     onBedtime = { vm.goToBed() },
-                    onMeal = { vm.recordMeal() },
+                    onMeal = { onDone -> vm.recordMeal { at -> onDone(at) } },
+                    savedMedName = savedMedName,
+                    onSavedShown = { vm.savedMedName.value = null },
+                    onDeleteMeal = { vm.deleteMeal(it) },
+                    onUndoBedtime = { vm.undoBedtime() },
                     sleepToRate = sleepToRate,
                     onRateSleep = { entry, sleep, wake -> vm.rateSleep(entry, sleep, wake) },
                     onDismissSleepRating = { vm.dismissSleepRating() },
@@ -282,13 +371,13 @@ private fun AppRoot() {
                     library = library,
                     onOpenNote = { nav.navigate("note/" + it) },
                     onAddNote = { nav.navigate("noteEdit/0") },
-                    onDeleteNote = { vm.deleteNote(it) },
+                    onDeleteNote = { id, undoable -> vm.deleteNote(id) { snapshot -> snapshot?.let { n -> undoable { vm.restoreNote(n) } } } },
                     onEditVisit = { nav.navigate("visitEdit/" + it) },
                     onAddVisit = { nav.navigate("visitEdit/0") },
-                    onDeleteVisit = { vm.deleteVisit(it) },
+                    onDeleteVisit = { id, undoable -> vm.deleteVisit(id) { snapshot -> snapshot?.let { v -> undoable { vm.restoreVisit(v) } } } },
                     onEditLibrary = { nav.navigate("libEdit/" + it) },
                     onAddLibrary = { nav.navigate("libEdit/0") },
-                    onDeleteLibrary = { vm.deleteLibraryEntry(it) },
+                    onDeleteLibrary = { id, undoable -> vm.deleteLibraryEntry(id) { snapshot -> snapshot?.let { e -> undoable { vm.restoreLibraryEntry(e) } } } },
                     contentPadding = tabPadding,
                 )
             }
@@ -319,6 +408,7 @@ private fun AppRoot() {
                     onTakeAt = { doseId, at -> vm.takeAt(doseId, at) },
                     onSkip = { vm.skip(it) },
                     onDeleteMeal = { vm.deleteMeal(it) },
+                    onRestoreMeal = { vm.restoreMeal(it) },
                     contentPadding = tabPadding,
                 )
             }
@@ -336,9 +426,12 @@ private fun AppRoot() {
                     onOpenReport = { nav.navigate(ROUTE_SETUP_REPORT) },
                     onOpenTutorial = { nav.navigate(ROUTE_ONBOARDING) },
                     onOpenWidget = { nav.navigate(ROUTE_SETUP_WIDGET) },
+                    onOpenTips = { nav.navigate(ROUTE_TIPS) },
+                    onOpenArchive = { nav.navigate(ROUTE_SETUP_ARCHIVE) },
                 )
             }
             composable(ROUTE_SETUP_WIDGET) { WidgetSettingsScreen(onBack = { nav.popBackStack() }) }
+            composable(ROUTE_SETUP_ARCHIVE) { ArchiveScreen(vm = vm, onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_REPEATS) { RepeatSettingsScreen(onBack = { nav.popBackStack() }, vm = vm) }
             composable(ROUTE_SETUP_SOUND) { SoundSettingsScreen(onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_DELIVERY) { DeliverySettingsScreen(onBack = { nav.popBackStack() }) }
@@ -430,7 +523,7 @@ private fun RowScope.TabItem(nav: NavHostController, current: String?, route: St
                 label,
                 maxLines = 1,
                 softWrap = false,
-                overflow = TextOverflow.Visible,
+                overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, letterSpacing = 0.sp),
             )
         },

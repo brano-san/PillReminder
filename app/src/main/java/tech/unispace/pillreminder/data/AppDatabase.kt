@@ -48,6 +48,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun mealDao(): MealDao
 
     companion object {
+        /** Текущая версия схемы — одно место для @Database и для теста миграций. */
+        const val LATEST_VERSION = 6
+
         @Volatile
         private var instance: AppDatabase? = null
 

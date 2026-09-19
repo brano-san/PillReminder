@@ -7,13 +7,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.content.BroadcastReceiver.PendingResult
 import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import tech.unispace.pillreminder.MainActivity
 import tech.unispace.pillreminder.R
@@ -41,7 +41,8 @@ import tech.unispace.pillreminder.ui.formatClock
 class PillWidgetProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        refresh(context)
+        // Система зовёт это на главном потоке: база читается в фоне, окно ресивера держит goAsync.
+        refreshInBackground(context, goAsync())
     }
 
     override fun onAppWidgetOptionsChanged(
@@ -51,7 +52,7 @@ class PillWidgetProvider : AppWidgetProvider() {
         newOptions: Bundle,
     ) {
         // Пользователь растянул виджет — перерисовываем под новый размер.
-        refresh(context)
+        refreshInBackground(context, goAsync())
     }
 
     companion object {
@@ -66,15 +67,30 @@ class PillWidgetProvider : AppWidgetProvider() {
             val nextDue: Boolean,
             /** Выпито из запланированного за день — вместо заголовка-названия приложения. */
             val progress: Pair<Int, Int>?,
+            /** Время ближайшего приёма для подписи кнопки: «Выпито 08:00». */
+            val nextAt: String = "",
         )
 
-        /** Для вызовов из UI: `refresh` блокирует поток запросом к базе, из настроек его зовут в фоне. */
+        /** Из UI и из ресиверов: чтение базы уходит в фон, вызывающий поток не ждёт. */
         fun refreshAsync(context: Context) {
             val app = context.applicationContext
             CoroutineScope(Dispatchers.IO).launch { refresh(app) }
         }
 
-        fun refresh(context: Context) {
+        /** Из системного колбэка виджета: окно ресивера держим, пока рисуем. */
+        private fun refreshInBackground(context: Context, pending: PendingResult) {
+            val app = context.applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    refresh(app)
+                } finally {
+                    pending.finish()
+                }
+            }
+        }
+
+        /** Рисует виджеты. Suspend: запрос к базе не имеет права блокировать главный поток. */
+        suspend fun refresh(context: Context) {
             val manager = AppWidgetManager.getInstance(context)
             val components = listOf(
                 ComponentName(context, PillWidgetProvider::class.java),
@@ -88,7 +104,7 @@ class PillWidgetProvider : AppWidgetProvider() {
             val settings = Settings(context)
             Lang.code = settings.language
             val s = Lang.s
-            val data = runBlocking { loadData(context) }
+            val data = loadData(context)
 
             val light = WidgetStyle.lightText(settings.widgetColor, settings.widgetText)
             val primaryText = WidgetStyle.textColor(primary = true, light = light)
@@ -110,8 +126,10 @@ class PillWidgetProvider : AppWidgetProvider() {
                     // Виджет могли сжать: сначала прячем подстроки, потом вторую строку, у узкого — заголовок.
                     // Иначе содержимое режется молча, без многоточия.
                     val minHeight = manager.getAppWidgetOptions(id)?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0) ?: 0
-                    val showSubs = wide && (minHeight == 0 || minHeight >= 155)
-                    val showSecond = minHeight == 0 || minHeight >= (if (wide) 125 else 58)
+                    // Пороги ниже объявленной минимальной высоты виджета: иначе на своём же минимуме
+                    // широкий виджет прятал вторую строку и подстроки, ради которых он и нужен.
+                    val showSubs = wide && (minHeight == 0 || minHeight >= 135)
+                    val showSecond = minHeight == 0 || minHeight >= (if (wide) 110 else 58)
                     val showTitle = wide || minHeight == 0 || minHeight >= 76
 
                     // Фон: цвет — фильтром, прозрачность — альфой; оба метода ImageView доступны RemoteViews,
@@ -136,7 +154,16 @@ class PillWidgetProvider : AppWidgetProvider() {
                         bindLine(views, R.id.widget_sub2, if (showSubs && showSecond) second?.sub else null, secondaryText)
 
                         // Кнопка «Выпито»: цвет плашки и текста — по стилю виджета, а не по теме лаунчера.
-                        views.setTextViewText(R.id.widget_take, s.widgetTake)
+                        // Кнопка называет приём и честно говорит, что сделает: при недоступной отметке
+                        // она открывает приложение, а выглядела точно так же, как отмечающая.
+                        views.setTextViewText(
+                            R.id.widget_take,
+                            when {
+                                data.nextDoseId < 0 || first == null -> s.widgetTake
+                                data.nextDue -> s.widgetTake + " " + data.nextAt
+                                else -> s.widgetOpen
+                            },
+                        )
                         views.setTextColor(R.id.widget_take, primaryText)
                         views.setInt(R.id.widget_take, "setBackgroundResource", if (light) R.drawable.widget_take_light else R.drawable.widget_take_dark)
                         if (data.nextDoseId >= 0 && first != null) {
@@ -210,14 +237,18 @@ class PillWidgetProvider : AppWidgetProvider() {
                     return !mealSatisfied(med, dose, all, meals, wakeAt)
                 }
 
+                // Виджет живёт на рабочем столе у всех на виду — режим конфиденциальности прячет названия и тут.
+                val private = Settings(context).privateNotifications
                 val lines = shown.map { dose ->
                     val med = medsById[dose.medId]
                     // Форма выпуска нужна, чтобы писать «2 капли», а не «2 таблетки».
                     val form = med?.form ?: "Таблетка"
                     // Дозировка и количество одной меткой, как на карточке: «10 мг × 2 таб.».
-                    val main = formatClock(dose.plannedAt) + "  " + dose.medNameSnapshot + " · " + s.amountFact(dose.amount, form, med?.doseInfo.orEmpty())
+                    val name = if (private) s.widgetPrivateName else dose.medNameSnapshot
+                    val main = formatClock(dose.plannedAt) + "  " + name +
+                        (if (private) "" else " · " + s.amountFact(dose.amount, form, med?.doseInfo.orEmpty()))
                     val isGated = gated(dose)
-                    val sub = med?.let { m ->
+                    val sub = if (private) null else med?.let { m ->
                         listOfNotNull(
                             if (isGated) s.waitsMealShort else null,
                             s.mealRelation(m.afterMealMinutes, m.beforeMealMinutes, m.mealCalories),
@@ -239,6 +270,7 @@ class PillWidgetProvider : AppWidgetProvider() {
                     },
                     nextDoseId = first?.id ?: -1L,
                     nextDue = first != null && !gated(first) && first.plannedAt - now <= EARLY_TAKE_THRESHOLD_MS,
+                    nextAt = first?.let { formatClock(it.plannedAt) }.orEmpty(),
                     progress = if (cycle != null && scheduled.isNotEmpty()) scheduled.count { it.status == DoseStatus.TAKEN } to scheduled.size else null,
                 )
             }
@@ -249,7 +281,7 @@ class PillWidgetProvider : AppWidgetProvider() {
 class PillWidgetWideProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        PillWidgetProvider.refresh(context)
+        PillWidgetProvider.refreshAsync(context)
     }
 
     override fun onAppWidgetOptionsChanged(
@@ -258,6 +290,6 @@ class PillWidgetWideProvider : AppWidgetProvider() {
         appWidgetId: Int,
         newOptions: Bundle,
     ) {
-        PillWidgetProvider.refresh(context)
+        PillWidgetProvider.refreshAsync(context)
     }
 }

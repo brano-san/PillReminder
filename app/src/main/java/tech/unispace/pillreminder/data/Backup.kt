@@ -3,6 +3,7 @@ package tech.unispace.pillreminder.data
 import androidx.room.withTransaction
 import org.json.JSONArray
 import org.json.JSONObject
+import tech.unispace.pillreminder.ui.Lang
 import tech.unispace.pillreminder.ui.formatClock
 import java.time.Instant
 import java.time.LocalDate
@@ -10,16 +11,52 @@ import java.time.LocalDate
 /** Файл создан более новой версией приложения — читать его текущий импорт не умеет. */
 class BackupTooNewException : Exception()
 
+/** Файл разобрался как JSON, но это не бэкап приложения — импорт не должен стирать базу. */
+class NotABackupException : Exception()
+
 /**
  * Полный бэкап базы в JSON и выгрузки в CSV.
  * Формат JSON версионирован — при изменении схемы поднимать "version" и учить импорт.
  */
 object Backup {
 
-    const val JSON_VERSION = 6
+    const val JSON_VERSION = 7
 
-    suspend fun exportJson(db: AppDatabase): String {
+    /** Маркер своего файла: по нему импорт отличает бэкап от чужого JSON. */
+    const val APP_MARKER = "doseday"
+
+    /**
+     * Настройки в JSON. Наборы строк (сроки визитов) становятся массивами, остальное пишется как есть.
+     */
+    fun settingsToJson(values: Map<String, Any?>): JSONObject {
+        val obj = JSONObject()
+        for ((key, value) in values) {
+            when (value) {
+                null -> Unit
+                is Set<*> -> obj.put(key, JSONArray(value.map { it.toString() }))
+                else -> obj.put(key, value)
+            }
+        }
+        return obj
+    }
+
+    /**
+     * Настройки обратно. Числа возвращаем как Int: в бэкап уходят только целочисленные настройки,
+     * а `getInt` по значению Long падает с ClassCastException.
+     */
+    fun settingsFromJson(obj: JSONObject): Map<String, Any?> = buildMap {
+        for (key in obj.keys()) {
+            when (val value = obj.get(key)) {
+                is JSONArray -> put(key, (0 until value.length()).map { value.getString(it) }.toSet())
+                is Number -> put(key, value.toInt())
+                else -> put(key, value)
+            }
+        }
+    }
+
+    suspend fun exportJson(db: AppDatabase, settings: Map<String, Any?> = emptyMap()): String {
         val root = JSONObject()
+        root.put("app", APP_MARKER)
         root.put("version", JSON_VERSION)
 
         root.put(
@@ -110,6 +147,17 @@ object Backup {
                             .put("place", v.place)
                             .put("remind", v.remind),
                     )
+                }
+            },
+        )
+
+        root.put("settings", settingsToJson(settings))
+
+        root.put(
+            "groups",
+            JSONArray().apply {
+                db.groupDao().getAll().forEach { g ->
+                    put(JSONObject().put("id", g.id).put("name", g.name).put("sortOrder", g.sortOrder))
                 }
             },
         )
@@ -205,16 +253,34 @@ object Backup {
      * Файл разбирается и проверяется до очистки, а вся запись идёт одной транзакцией:
      * битый или чужой файл откатывается и не оставляет пользователя с пустой базой.
      */
-    suspend fun importJson(db: AppDatabase, json: String) {
+    /**
+     * Похож ли файл на бэкап приложения. Свой маркер появился в версии 7; файлы постарше опознаём
+     * по обязательной паре «version + medications» — иначе любой валидный JSON стирал бы базу.
+     */
+    fun looksLikeBackup(root: JSONObject): Boolean =
+        root.optString("app") == APP_MARKER || (root.has("version") && root.has("medications"))
+
+    suspend fun importJson(db: AppDatabase, json: String, applySettings: (Map<String, Any?>) -> Unit = {}) {
         val root = JSONObject(json)
+        if (!looksLikeBackup(root)) throw NotABackupException()
         if (root.optInt("version", 1) > JSON_VERSION) throw BackupTooNewException()
         db.withTransaction { importParsed(db, root) }
+        // Настройки живут в SharedPreferences, а не в базе: применяем после успешной транзакции.
+        root.optJSONObject("settings")?.let { applySettings(settingsFromJson(it)) }
     }
 
     private suspend fun importParsed(db: AppDatabase, root: JSONObject) {
         db.clearAllTables()
 
-        val groupId = db.groupDao().insert(MedGroup(name = "Мои таблетки"))
+        // Группы из файла; старого бэкапа без них хватает одной группы по умолчанию.
+        val groupsArr = root.optJSONArray("groups") ?: JSONArray()
+        val groupIdMap = mutableMapOf<Long, Long>()
+        for (i in 0 until groupsArr.length()) {
+            val o = groupsArr.getJSONObject(i)
+            val newId = db.groupDao().insert(MedGroup(name = o.getString("name"), sortOrder = o.optInt("sortOrder")))
+            groupIdMap[o.optLong("id")] = newId
+        }
+        val groupId = groupIdMap.values.firstOrNull() ?: db.groupDao().insert(MedGroup(name = Lang.s.defaultGroupName))
 
         // Пересоздаём таблетки, запоминая соответствие старых id новым — для связей и приёмов.
         val medIdMap = mutableMapOf<Long, Long>()
@@ -223,7 +289,7 @@ object Backup {
         for (o in parsed) {
             val newId = db.medicationDao().insert(
                 Medication(
-                    groupId = groupId,
+                    groupId = groupIdMap[o.optLong("groupId")] ?: groupId,
                     name = o.getString("name"),
                     comment = o.optString("comment"),
                     dosesPerIntake = o.optDouble("dosesPerIntake", 1.0),
@@ -246,13 +312,23 @@ object Backup {
                     beforeMealMinutes = o.optInt("beforeMealMinutes", 0),
                     mealCalories = o.optInt("mealCalories", 0),
                     weekdays = o.optString("weekdays"),
-                    apartFromMedIds = o.optString("apartFromMedIds"),
+                    // id таблеток переводим вторым проходом — на этом шаге карта ещё неполная.
+                    apartFromMedIds = "",
                 ),
             )
             medIdMap[o.getLong("id")] = newId
         }
-        // Второй проход: связи «после другой таблетки».
+        // Второй проход: связи «после другой таблетки» и список «разносить с этими».
         for (o in parsed) {
+            val newId = medIdMap[o.getLong("id")]
+            val apart = o.optString("apartFromMedIds")
+                .split(',').mapNotNull { it.trim().toLongOrNull() }
+                .mapNotNull { medIdMap[it] }
+            if (newId != null && apart.isNotEmpty()) {
+                db.medicationDao().getById(newId)?.let {
+                    db.medicationDao().update(it.copy(apartFromMedIds = apart.joinToString(",")))
+                }
+            }
             if (!o.isNull("linkedToMedId")) {
                 val newId = medIdMap[o.getLong("id")] ?: continue
                 val parentNew = medIdMap[o.getLong("linkedToMedId")] ?: continue
@@ -332,7 +408,7 @@ object Backup {
                     endEpochDay = if (o.isNull("endEpochDay")) null else o.getLong("endEpochDay"),
                     effect = o.optString("effect"),
                     feeling = o.optString("feeling"),
-                    photoUri = if (o.isNull("photoUri")) null else o.getString("photoUri"),
+                    photoUri = if (o.isNull("photoUri")) null else safePhotoUri(o.getString("photoUri")),
                     form = o.optString("form"),
                     doseInfo = o.optString("doseInfo"),
                 ),
@@ -438,12 +514,28 @@ object Backup {
         }
     }
 
-    private fun csv(value: String): String =
-        if (value.contains(',') || value.contains('"') || value.contains('\n')) {
-            "\"" + value.replace("\"", "\"\"") + "\""
+    /**
+     * Значение для CSV. Кроме запятых и кавычек обезвреживаем формулы: строка, начинающаяся с
+     * `=`, `+`, `-` или `@`, в Excel и Sheets исполняется как формула — а названия таблеток и
+     * заметки могли приехать из чужого бэкапа.
+     */
+    fun csv(value: String): String {
+        val safe = if (value.firstOrNull() in FORMULA_STARTS) "'" + value else value
+        return if (safe.contains(',') || safe.contains('"') || safe.contains('\n')) {
+            "\"" + safe.replace("\"", "\"\"") + "\""
         } else {
-            value
+            safe
         }
+    }
+
+    private val FORMULA_STARTS = setOf('=', '+', '-', '@')
+
+    /**
+     * Ссылка на фото из файла бэкапа. Чужой файл мог подсунуть любой URI, который приложение
+     * потом открыло бы своими правами, поэтому пускаем только свои схемы.
+     */
+    fun safePhotoUri(value: String?): String? =
+        value?.takeIf { it.startsWith("content://") || it.startsWith("file:///data/") }
 
     private suspend fun medsAll(db: AppDatabase) = db.medicationDao().getAllIncludingInactive()
     private suspend fun dosesAll(db: AppDatabase) = db.doseDao().getAll()

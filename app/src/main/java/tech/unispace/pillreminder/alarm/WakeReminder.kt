@@ -73,14 +73,13 @@ class WakeReminderReceiver : BroadcastReceiver() {
             try {
                 val db = app.container.db
                 if (!WakeReminder.cycleActive(db)) {
-                    // За этим уведомлением нет приёма — кнопки «Выпито/Пропустить/Отложить» ему не нужны.
-                    Notifications.show(
+                    // За этим уведомлением нет приёма: вместо «Выпито/Пропустить» у него одна кнопка «Подъём».
+                    Notifications.showWakeReminder(
                         context = app,
-                        doseId = WAKE_NOTIF_ID,
+                        id = WAKE_NOTIF_ID,
                         title = Lang.s.wakeRemindNotifTitle,
                         text = Lang.s.wakeRemindNotifBody,
                         useAlarmChannel = Settings(app).alarmSound,
-                        withActions = false,
                     )
                 }
                 WakeReminder.schedule(app)

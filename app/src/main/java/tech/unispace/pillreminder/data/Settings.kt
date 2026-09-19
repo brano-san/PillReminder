@@ -39,12 +39,12 @@ class Settings(context: Context) {
 
     /** Через сколько минут повторять. */
     var repeatIntervalMinutes: Int
-        get() = prefs.getInt(KEY_REPEAT_INTERVAL, 3)
+        get() = prefs.getInt(KEY_REPEAT_INTERVAL, 10)
         set(value) = prefs.edit().putInt(KEY_REPEAT_INTERVAL, value.coerceIn(1, 120)).apply()
 
     /** Сколько раз повторить, прежде чем отстать. */
     var repeatCount: Int
-        get() = prefs.getInt(KEY_REPEAT_COUNT, 20)
+        get() = prefs.getInt(KEY_REPEAT_COUNT, 6)
         set(value) = prefs.edit().putInt(KEY_REPEAT_COUNT, value.coerceIn(1, 200)).apply()
 
     /**
@@ -205,6 +205,49 @@ class Settings(context: Context) {
             .putStringSet(KEY_VISIT_OFFSETS_EVER, value.map { it.toString() }.toSet())
             .apply()
 
+    /**
+     * Настройки для бэкапа. Ключи — как в SharedPreferences; читаем и пишем по одному списку,
+     * чтобы новая настройка не потерялась при восстановлении на новом телефоне.
+     */
+    fun exportMap(): Map<String, Any?> = BACKUP_KEYS.associateWith { prefs.all[it] }
+
+    /** Применить настройки из бэкапа: чужие и неизвестные ключи игнорируются. */
+    fun importMap(values: Map<String, Any?>) {
+        val editor = prefs.edit()
+        for ((key, value) in values) {
+            if (key !in BACKUP_KEYS) continue
+            when (value) {
+                is Boolean -> editor.putBoolean(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is String -> editor.putString(key, value)
+                is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                null -> editor.remove(key)
+            }
+        }
+        editor.apply()
+    }
+
+    /** Тема приложения: "system" (как в системе), "light" или "dark". */
+    var theme: String
+        get() = prefs.getString(KEY_THEME, THEME_SYSTEM) ?: THEME_SYSTEM
+        set(value) = prefs.edit().putString(KEY_THEME, value).apply()
+
+    /** Уведомление «Таблетки заканчиваются». */
+    var notifyLowStock: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFY_LOW_STOCK, true)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIFY_LOW_STOCK, value).apply()
+
+    /** Уведомление «Курс закончился». */
+    var notifyCourseDone: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFY_COURSE_DONE, true)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIFY_COURSE_DONE, value).apply()
+
+    /** Уведомление «День закрыт — все приёмы отмечены». */
+    var notifyDayDone: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFY_DAY_DONE, true)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIFY_DAY_DONE, value).apply()
+
     /** Компактные карточки таблеток на главном экране. */
     var homeCompact: Boolean
         get() = prefs.getBoolean(KEY_HOME_COMPACT, false)
@@ -234,7 +277,7 @@ class Settings(context: Context) {
             ?: WidgetStyle.textModeFor(widgetColor)
         set(value) = prefs.edit().putString(KEY_WIDGET_TEXT, value).apply()
 
-    private companion object {
+    internal companion object {
         const val KEY_DAY_TIMELINE = "show_day_timeline"
         const val KEY_WIDGET_COLOR = "widget_color"
         const val KEY_WIDGET_OPACITY = "widget_opacity"
@@ -268,5 +311,27 @@ class Settings(context: Context) {
         const val KEY_REPEAT_INTERVAL = "repeat_interval"
         const val KEY_REPEAT_COUNT = "repeat_count"
         const val KEY_ALARM_SOUND = "alarm_sound"
+        const val KEY_THEME = "theme"
+        const val KEY_NOTIFY_LOW_STOCK = "notify_low_stock"
+        const val KEY_NOTIFY_COURSE_DONE = "notify_course_done"
+        const val KEY_NOTIFY_DAY_DONE = "notify_day_done"
+
+        const val THEME_SYSTEM = "system"
+        const val THEME_LIGHT = "light"
+        const val THEME_DARK = "dark"
+
+        /**
+         * Что попадает в бэкап настроек. Сюда НЕ входит состояние устройства: показанный туториал,
+         * незакрытый сон, отметка «про день уже сказали» — их переносить на новый телефон нельзя.
+         */
+        val BACKUP_KEYS = setOf(
+            KEY_REPEAT_ENABLED, KEY_REPEAT_INTERVAL, KEY_REPEAT_COUNT, KEY_SNOOZE, KEY_SNOOZE_OPTIONS,
+            KEY_QUIET_ENABLED, KEY_QUIET_FROM, KEY_QUIET_TO, KEY_ALARM_SOUND, KEY_FULL_SCREEN,
+            KEY_LANGUAGE, KEY_SOUND_URI, KEY_PRIVATE, KEY_LOW_STOCK, KEY_WAKE_REMIND, KEY_WAKE_REMIND_AT,
+            KEY_CHART_SMOOTH, KEY_MINI_POINTS, KEY_VISIT_OFFSETS, KEY_VISIT_CUSTOM,
+            KEY_WIDGET_COLOR, KEY_WIDGET_OPACITY, KEY_WIDGET_TEXT, KEY_HOME_COMPACT,
+            KEY_HOME_ACTIONS, KEY_DAY_TIMELINE, KEY_ASK_SLEEP, KEY_THEME,
+            KEY_NOTIFY_LOW_STOCK, KEY_NOTIFY_COURSE_DONE, KEY_NOTIFY_DAY_DONE,
+        )
     }
 }

@@ -16,7 +16,8 @@ import tech.unispace.pillreminder.data.Planner
 import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.data.mealSatisfied
 import tech.unispace.pillreminder.ui.Lang
-import tech.unispace.pillreminder.ui.snoozedUntil
+import tech.unispace.pillreminder.ui.formatClock
+import tech.unispace.pillreminder.data.snoozedUntil
 
 /**
  * Срабатывает в момент приёма: показывает уведомление и, если приём так и не отмечен,
@@ -36,8 +37,8 @@ class ReminderReceiver : BroadcastReceiver() {
             Notifications.show(
                 app,
                 AlarmScheduler.TEST_ID,
-                if (testFullScreen) Lang.s.testFsTitle else Lang.s.testTitle,
-                Lang.s.testBody,
+                title = if (testFullScreen) Lang.s.testFsTitle else Lang.s.testTitle,
+                text = Lang.s.testBody,
                 useAlarmChannel = settings.alarmSound,
                 fullScreen = testFullScreen,
                 withActions = false,
@@ -92,6 +93,10 @@ class ReminderReceiver : BroadcastReceiver() {
                     ""
                 } else {
                     buildString {
+                        // Плановое время: увидев напоминание в 11 утра, человек должен понимать,
+                        // это про 08:00 или про сейчас.
+                        append(Lang.s.plannedAtShort(formatClock(dose.plannedAt)))
+                        append(" · ")
                         append(formatAmount(dose.amount, med.form))
                         // Связь с едой обязана быть видна в шторке; личный комментарий — нет,
                         // он остаётся на карточке таблетки.
@@ -130,7 +135,8 @@ class ReminderReceiver : BroadcastReceiver() {
                     } else {
                         batch.joinToString("\n") { d ->
                             // Слово «таблетки/капли» — по форме каждой таблетки, а не по форме старшей.
-                            d.medNameSnapshot + " · " + formatAmount(d.amount, medsById[d.medId]?.form ?: med.form)
+                            formatClock(d.plannedAt) + " · " + d.medNameSnapshot + " · " +
+                                formatAmount(d.amount, medsById[d.medId]?.form ?: med.form)
                         }
                     }
                     Notifications.showGroup(
@@ -146,6 +152,7 @@ class ReminderReceiver : BroadcastReceiver() {
                     Notifications.show(
                         context = app,
                         doseId = doseId,
+                        plannedAt = dose.plannedAt,
                         title = if (private) {
                             Lang.s.timeToTakeFallback
                         } else {

@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Card
@@ -50,6 +51,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -72,6 +74,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.data.DoctorPreset
 import tech.unispace.pillreminder.data.DoseStatus
@@ -138,7 +142,9 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
 
     val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if (uri != null) {
-            scope.launch {
+            // Сборка JSON и запись файла — в фоне: на большом бэкапе это заметная пауза интерфейса,
+            // а прерванная запись оставляла обрезанный файл.
+            scope.launch(Dispatchers.IO) {
                 try {
                     val text = pendingContent()
                     context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
@@ -151,7 +157,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            scope.launch {
+            scope.launch(Dispatchers.IO) {
                 val text = try {
                     context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
                 } catch (_: Exception) {
@@ -165,6 +171,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                             when (outcome) {
                                 ImportOutcome.OK -> s.importDone
                                 ImportOutcome.TOO_NEW -> s.importTooNew
+                                ImportOutcome.NOT_BACKUP -> s.importNotBackup
                                 ImportOutcome.FAILED -> s.importError
                             },
                         )
@@ -206,7 +213,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                         saveLauncher.launch("pills-backup-$stamp.json")
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(s.exportBtn) }
+                ) { Text(s.exportBackupBtn, maxLines = 1, softWrap = false) }
             }
         }
         Card(Modifier.fillMaxWidth()) {
@@ -219,7 +226,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                         saveLauncher.launch("pills-doses-$stamp.csv")
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(s.exportBtn) }
+                ) { Text(s.exportDosesBtn, maxLines = 1, softWrap = false) }
                 Spacer(Modifier.height(12.dp))
                 Text(s.exportCsvTrackers, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
@@ -229,7 +236,7 @@ fun BackupScreen(vm: MainViewModel, onBack: () -> Unit) {
                         saveLauncher.launch("pills-trackers-$stamp.csv")
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(s.exportBtn) }
+                ) { Text(s.exportTrackersBtn, maxLines = 1, softWrap = false) }
             }
         }
         Card(Modifier.fillMaxWidth()) {
@@ -279,11 +286,16 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
         meds = vm.medsForReport()
         presets = vm.doctorPresets()
     }
-    LaunchedEffect(days, sections, selectedMeds) { report = vm.buildReport(days, sections, medIds = selectedMeds) }
+    LaunchedEffect(days, sections, selectedMeds) {
+        // Щелчок по галочке перестраивает весь отчёт (все приёмы, трекеры, заметки) — ждём паузы,
+        // иначе выбор десяти таблеток превращается в десять полных пересборок подряд.
+        delay(250)
+        report = vm.buildReport(days, sections, medIds = selectedMeds)
+    }
 
     val saveTxt = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) {
-            scope.launch {
+            scope.launch(Dispatchers.IO) {
                 try {
                     // В файл — без пустых разделов: печатный лист не должен быть замусорен графами «нет данных».
                     val text = vm.buildReport(days, sections, hideEmpty = true, medIds = selectedMeds)
@@ -297,7 +309,7 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
     }
     val savePdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) {
-            scope.launch {
+            scope.launch(Dispatchers.IO) {
                 try {
                     val bytes = Report.toPdf(vm.buildReport(days, sections, hideEmpty = true, medIds = selectedMeds))
                     context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
@@ -322,6 +334,8 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
                         value = customDays,
                         onValueChange = { customDays = it.filter { c -> c.isDigit() }.take(4) },
                         label = { Text(s.periodDaysLabel) },
+                        isError = customDays.isNotEmpty() && customDays.toIntOrNull()?.let { it in 1..3650 } != true,
+                        supportingText = { Text(s.rangeHint(1, 3650)) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = fieldColors(),
@@ -330,9 +344,9 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
                 },
                 confirmButton = {
                     TextButton(
-                        enabled = (customDays.toIntOrNull() ?: 0) > 0,
+                        enabled = customDays.toIntOrNull()?.let { it in 1..3650 } == true,
                         onClick = {
-                            customDays.toIntOrNull()?.coerceIn(1, 3650)?.let { days = it }
+                            customDays.toIntOrNull()?.let { days = it }
                             customPeriod = false
                         },
                     ) { Text(s.done) }
@@ -410,7 +424,9 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
         ToolSection(s.reportSectionsTitle) {
             Column {
                 listOf(
-                    Report.SEC_INTAKES to s.repIntakes,
+                    // Галочка называется так же, как раздел, который она включает.
+                    Report.SEC_INTAKES to s.repAdherence,
+                    Report.SEC_JOURNAL to s.repJournal,
                     Report.SEC_MEDS to s.repMeds,
                     Report.SEC_TRACKERS to s.repTrackers,
                     Report.SEC_NOTES to s.repNotes,
@@ -524,6 +540,13 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
             ) { Text(s.repPresetSave, maxLines = 1, softWrap = false) }
         }
 
+        // Предпросмотр выше кнопок: сначала видно, что уйдёт врачу, потом — чем это отправить.
+        ToolSection(s.reportPreviewTitle) {
+            Text(s.reportEmptyHidden, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Отчёт собран моноширинным: пропорциональным шрифтом колонки и линейки разъезжались.
+            Text(report, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+        }
+
         ToolSection(s.reportExportTitle) {
         // Файлы в одну строку, отправка — отдельной строкой под ними.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -547,10 +570,6 @@ fun ReportScreen(vm: MainViewModel, onBack: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text(s.reportShare, maxLines = 1, softWrap = false) }
 
-        }
-        ToolSection(s.reportPreviewTitle) {
-            Text(s.reportEmptyHidden, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(report, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -580,7 +599,7 @@ private fun MultiLineChart(series: List<Pair<List<Double?>, Color>>, xLabels: Li
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
     Canvas(modifier) {
         val padY = size.height * 0.08f
-        val usable = size.height - padY * 2 - X_LABELS_PAD
+        val usable = size.height - padY * 2 - xLabelsPad()
         drawXLabels(xLabels, 0f, size.width, labelColor)
         for (i in 0..3) {
             val y = padY + usable * (1f - i / 3f)
@@ -700,8 +719,10 @@ fun CorrelationScreen(vm: MainViewModel, onBack: () -> Unit) {
                     Spacer(Modifier.height(10.dp))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         pairs.forEach { (a, b, r) ->
-                            AssistChip(
+                            // Не кнопка: рябь без действия читалась как «нажми, что-то будет».
+                            SuggestionChip(
                                 onClick = {},
+                                enabled = false,
                                 label = {
                                     Text(
                                         "$a×$b  " + (r?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "—"),
@@ -790,7 +811,12 @@ suspend fun MainViewModel.seriesPerDay(key: String, days: Int): List<Double?> {
 
     return when (key) {
         "adherence" -> {
-            val doses = db.doseDao().getAll().filter { it.dayEpochDay in fromDay..toDay }.groupBy { it.dayEpochDay }
+            // Тот же отбор приёмов, что в отчёте: иначе дисциплина на экране и в PDF для врача расходятся
+            // (сегодняшние ещё не наступившие приёмы не пропуски).
+            val now = System.currentTimeMillis()
+            val doses = db.doseDao().getAll()
+                .filter { Report.includeDose(it, fromDay, toDay, now) }
+                .groupBy { it.dayEpochDay }
             (fromDay..toDay).map { day ->
                 val list = doses[day] ?: return@map null
                 if (list.isEmpty()) null else list.count { it.status == DoseStatus.TAKEN } * 100.0 / list.size
@@ -812,7 +838,8 @@ suspend fun MainViewModel.seriesPerDay(key: String, days: Int): List<Double?> {
                     "sleep_hours" -> list.mapNotNull { e ->
                         if (e.sleepStart != null && e.sleepEnd != null) (e.sleepEnd - e.sleepStart) / 3_600_000.0 else null
                     }.averageOrNull()
-                    else -> list.map { it.value }.averageOrNull()
+                    // Неоценённые автозаписи сна (значение 0) в среднее не идут — как и в отчёте.
+                    else -> list.map { it.value }.filter { type == TrackerType.WEIGHT || it > 0 }.averageOrNull()
                 }
             }
         }

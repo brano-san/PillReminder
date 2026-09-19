@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
-    <!-- Флаг «гайд показан» — состояние устройства, а не пользователя: ни в облако, ни на новый телефон. -->
-    <cloud-backup>
+    <!-- Медицинские данные уезжают в облако только при сквозном шифровании резервной копии;
+         флаг «гайд показан» — состояние устройства, а не пользователя. -->
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
         <exclude domain="sharedpref" path="local_state.xml" />
     </cloud-backup>
     <device-transfer>

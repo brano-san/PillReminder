@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,17 +28,24 @@ import tech.unispace.pillreminder.alarm.WakeReminder
 import tech.unispace.pillreminder.container
 import tech.unispace.pillreminder.data.Backup
 import tech.unispace.pillreminder.data.BackupTooNewException
+import tech.unispace.pillreminder.data.NotABackupException
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
 import tech.unispace.pillreminder.data.Medication
 import tech.unispace.pillreminder.data.DoctorVisit
 import tech.unispace.pillreminder.data.DoctorPreset
 import tech.unispace.pillreminder.data.MedLibraryEntry
+import tech.unispace.pillreminder.data.MealEvent
 import tech.unispace.pillreminder.data.Note
 import tech.unispace.pillreminder.data.Report
 import tech.unispace.pillreminder.data.Tracker
 import tech.unispace.pillreminder.data.TrackerEntry
 import tech.unispace.pillreminder.data.WakeEvent
+import tech.unispace.pillreminder.data.courseEndDay
+import tech.unispace.pillreminder.data.OVERDUE_GRACE_MS
+import tech.unispace.pillreminder.data.isMissed
+import tech.unispace.pillreminder.data.isTakeAllCandidate
+import tech.unispace.pillreminder.data.snoozedUntil
 import tech.unispace.pillreminder.data.byClock
 import tech.unispace.pillreminder.data.epochDayOf
 import tech.unispace.pillreminder.data.isActive
@@ -62,9 +71,13 @@ data class MedRow(
     val snoozedUntil: Long? = null,
     /** Статусы приёмов текущего набора по порядку (null — приём ещё не создан) — для точек прогресса. */
     val setStatuses: List<DoseStatus?> = emptyList(),
+    /** Приёмы, просроченные больше двух часов: они не «следующие», их разбирают отдельной строкой. */
+    val missed: List<Dose> = emptyList(),
 )
 
 data class HomeState(
+    /** Сколько приёмов отметит кнопка «Выпить всё, что пора» — считается тем же правилом, что и действие. */
+    val dueNowCount: Int = 0,
     val now: Long = System.currentTimeMillis(),
     val wokeUpAt: Long? = null,
     /** Когда нажали «Сон» в этом цикле; null — день идёт. */
@@ -145,6 +158,8 @@ data class JournalState(
     val formById: Map<Long, String> = emptyMap(),
     /** Дозировка по id таблетки — для коротких подписей схемы дня («Эсц 10мг»). */
     val doseInfoById: Map<Long, String> = emptyMap(),
+    /** День текущего цикла: «прошлый день» считается по нему, а не по календарю — цикл живёт и после полуночи. */
+    val cycleDay: Long = today(),
 )
 
 /** Точка приёма под числом в календаре: выпит, пропущен или просрочен, ещё впереди. */
@@ -156,14 +171,19 @@ enum class HeatMark { TAKEN, MISSED, PENDING }
  */
 data class DayHeat(val taken: Int, val planned: Int, val pending: Int = 0, val marks: List<HeatMark> = emptyList())
 
-/** Точки календаря по приёмам дня: ожидающий с прошедшим временем — пропуск, с будущим — контур. Чистая, с тестом. */
-fun heatMarks(doses: List<Dose>, now: Long): List<HeatMark> = doses.sortedBy { it.plannedAt }.map { d ->
-    when {
-        d.status == DoseStatus.TAKEN -> HeatMark.TAKEN
-        d.status == DoseStatus.SKIPPED || d.plannedAt < now -> HeatMark.MISSED
-        else -> HeatMark.PENDING
+/**
+ * Точки календаря по приёмам дня. Ожидающий приём становится пропуском не сразу, а через [graceMs]:
+ * карточка и схема дня краснеют по тому же правилу, а раньше клетка «сегодня» краснела через минуту
+ * после планового времени. Чистая, с тестом.
+ */
+fun heatMarks(doses: List<Dose>, now: Long, graceMs: Long = OVERDUE_GRACE_MS): List<HeatMark> =
+    doses.sortedBy { it.plannedAt }.map { d ->
+        when {
+            d.status == DoseStatus.TAKEN -> HeatMark.TAKEN
+            d.status == DoseStatus.SKIPPED || now - d.plannedAt > graceMs -> HeatMark.MISSED
+            else -> HeatMark.PENDING
+        }
     }
-}
 
 /** Трекер и все его записи (новые первыми). */
 data class TrackerRow(
@@ -178,10 +198,22 @@ data class HeatmapState(
 )
 
 /** Итог восстановления из бэкапа — экран показывает разные сообщения. */
-enum class ImportOutcome { OK, TOO_NEW, FAILED }
+enum class ImportOutcome { OK, TOO_NEW, NOT_BACKUP, FAILED }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
+
+    /**
+     * Мутации и чтения базы — не на главном потоке. Планировщик ставит будильники через AlarmManager
+     * (IPC на каждый приём) и обновляет виджет; на Main это отдавалось задержкой после «Подъёма».
+     */
+    private val io = Dispatchers.Default
+
+    /**
+     * Колбэк экрана — всегда на главном потоке. Сама работа идёт в фоне, но `onDone` обычно трогает
+     * навигацию, а NavController не потокобезопасен.
+     */
+    private suspend fun ui(block: () -> Unit) = withContext(Dispatchers.Main) { block() }
 
     private val planner = app.container.planner
     private val db = app.container.db
@@ -215,7 +247,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         // Смена суток при открытом приложении: досоздать приёмы «по часам» и переставить будильники.
-        viewModelScope.launch {
+        viewModelScope.launch(io) {
             dayFlow.collect { day ->
                 planner.rescheduleAlarms()
                 // Журнал открывается на дне цикла (он мог начаться вчера вечером), пока пользователь сам не выбрал другой.
@@ -244,7 +276,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val nameById = meds.associate { it.id to it.name }
                 val rows = meds.map { med ->
                     val list = (if (med.byClock) clockDoses else cycleDoses).filter { it.medId == med.id }
-                    val next = list.filter { it.status == DoseStatus.PENDING }.minByOrNull { it.plannedAt }
+                    val pending = list.filter { it.status == DoseStatus.PENDING }
+                    // Давно просроченные приёмы не становятся «следующим»: иначе карточка весь день
+                    // показывает утреннее время, а про наступивший дневной приём не говорит ничего.
+                    val missed = pending.filter { isMissed(it, now) }
+                    val next = (pending - missed.toSet()).minByOrNull { it.plannedAt } ?: missed.minByOrNull { it.plannedAt }
                     val size = med.timesPerDay.coerceAtLeast(1)
                     val set = currentSet(list, size)
                     MedRow(
@@ -262,6 +298,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         waitsMeal = next != null && !mealSatisfied(med, next, list, meals, wake?.wakeAt),
                         snoozedUntil = next?.snoozedUntil(now),
                         setStatuses = if (med.asNeeded) emptyList() else setStatuses(set, size),
+                        missed = if (next != null && next in missed) missed - next else missed,
                     )
                 }
                 val medsById = meds.associateBy { it.id }
@@ -269,6 +306,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // «День закрыт» — только про запланированные приёмы: разовый приём «по необходимости» дня не закрывает.
                 val scheduled = shown.filter { medsById[it.medId]?.asNeeded != true }
                 HomeState(
+                    dueNowCount = shown.count { d ->
+                        val m = medsById[d.medId]
+                        isTakeAllCandidate(d, now) && m != null && m.active &&
+                            mealSatisfied(m, d, shown, meals, wake?.wakeAt)
+                    },
                     now = now,
                     wokeUpAt = cycle?.wakeAt,
                     bedAt = cycle?.bedAt,
@@ -283,6 +325,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Статистика ----------
 
+    /** Название только что сохранённой таблетки — главный экран показывает снекбар «Сохранено». */
+    val savedMedName = MutableStateFlow<String?>(null)
+
     val selectedDay = MutableStateFlow(today())
 
     val journal: StateFlow<JournalState> = selectedDay.flatMapLatest { day ->
@@ -290,7 +335,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             db.doseDao().observeDay(day),
             db.wakeDao().observeDay(day),
             db.mealDao().observeAllTimes(),
-        ) { doses, wake, allMeals ->
+            dayFlow,
+        ) { doses, wake, allMeals, cycleDay ->
             // Еда — по окну цикла (подъём … отбой или +18 ч), а без отметки подъёма — по календарю:
             // «Еда» в 00:40 относится к дню, который начался вчера вечером.
             val meals = if (wake != null) {
@@ -308,6 +354,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 meals = meals.sorted(),
                 formById = allMeds.associate { it.id to it.form },
                 doseInfoById = allMeds.associate { it.id to it.doseInfo },
+                cycleDay = cycleDay,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), JournalState())
@@ -321,7 +368,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Сегодняшние приёмы, время которых ещё не пришло, — не пропуски: утром день не должен краснеть.
             val now = System.currentTimeMillis()
             val days = doses.groupBy { it.dayEpochDay }.mapValues { (_, list) ->
-                val decided = list.filter { it.status != DoseStatus.PENDING || it.plannedAt < now }
+                // Ожидающий приём попадает в знаменатель только когда просрочен по-настоящему:
+                // иначе день краснел через минуту после планового времени.
+                val decided = list.filter { it.status != DoseStatus.PENDING || now - it.plannedAt > OVERDUE_GRACE_MS }
                 DayHeat(
                     taken = decided.count { it.status == DoseStatus.TAKEN },
                     planned = decided.size,
@@ -340,15 +389,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun loadNote(id: Long): Note? = db.noteDao().getById(id)
 
-    fun saveNote(note: Note, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun saveNote(note: Note, onDone: () -> Unit = {}) = viewModelScope.launch(io) {
         db.noteDao().upsert(note)
-        onDone()
+        ui { onDone() }
     }
 
-    fun deleteNote(id: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
+    /**
+     * Удаление с возвратом: снимок отдаётся экрану, чтобы снекбар «Вернуть» мог восстановить запись.
+     * Без него длинная заметка о самочувствии исчезала от одного нажатия навсегда.
+     */
+    fun deleteNote(id: Long, onDone: (Note?) -> Unit = {}) = viewModelScope.launch(io) {
+        val snapshot = db.noteDao().getById(id)
         db.noteDao().delete(id)
-        onDone()
+        ui { onDone(snapshot) }
     }
+
+    fun restoreNote(note: Note) = viewModelScope.launch(io) { db.noteDao().upsert(note.copy(id = 0)) }
 
     /** Название таблетки (в том числе удалённой) — для карточки заметки. */
     suspend fun medName(id: Long): String? = db.medicationDao().getById(id)?.name
@@ -360,23 +416,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun loadVisit(id: Long): DoctorVisit? = db.visitDao().getById(id)
 
-    fun saveVisit(visit: DoctorVisit, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun saveVisit(visit: DoctorVisit, onDone: () -> Unit = {}) = viewModelScope.launch(io) {
         db.visitDao().upsert(visit)
         VisitAlarms.reschedule(getApplication(), db)
-        onDone()
+        ui { onDone() }
     }
 
-    fun deleteVisit(id: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun deleteVisit(id: Long, onDone: (DoctorVisit?) -> Unit = {}) = viewModelScope.launch(io) {
+        val snapshot = db.visitDao().getById(id)
         db.visitDao().delete(id)
         VisitAlarms.reschedule(getApplication(), db)
-        onDone()
+        ui { onDone(snapshot) }
     }
 
-    fun rescheduleVisitAlarms() = viewModelScope.launch {
+    fun restoreVisit(visit: DoctorVisit) = viewModelScope.launch(io) {
+        db.visitDao().upsert(visit.copy(id = 0))
         VisitAlarms.reschedule(getApplication(), db)
     }
 
-    fun rescheduleWakeReminder() = viewModelScope.launch {
+    fun rescheduleVisitAlarms() = viewModelScope.launch(io) {
+        VisitAlarms.reschedule(getApplication(), db)
+    }
+
+    fun rescheduleWakeReminder() = viewModelScope.launch(io) {
         WakeReminder.schedule(getApplication())
     }
 
@@ -392,15 +454,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun loadLibraryEntry(id: Long): MedLibraryEntry? = db.libraryDao().getById(id)
 
-    fun saveLibraryEntry(entry: MedLibraryEntry, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun saveLibraryEntry(entry: MedLibraryEntry, onDone: () -> Unit = {}) = viewModelScope.launch(io) {
         db.libraryDao().upsert(entry)
-        onDone()
+        ui { onDone() }
     }
 
-    fun deleteLibraryEntry(id: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun deleteLibraryEntry(id: Long, onDone: (MedLibraryEntry?) -> Unit = {}) = viewModelScope.launch(io) {
+        val snapshot = db.libraryDao().getById(id)
         db.libraryDao().delete(id)
-        onDone()
+        ui { onDone(snapshot) }
     }
+
+    fun restoreLibraryEntry(entry: MedLibraryEntry) = viewModelScope.launch(io) { db.libraryDao().upsert(entry.copy(id = 0)) }
 
     // ---------- Трекеры ----------
 
@@ -419,46 +484,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun loadTracker(id: Long): Tracker? = db.trackerDao().getById(id)
 
     /** Трекер каждого типа один: новая запись того же типа обновляет существующий, а не плодит дубль с двойными напоминаниями. */
-    fun saveTracker(tracker: Tracker, onDone: (Long) -> Unit = {}) = viewModelScope.launch {
+    fun saveTracker(tracker: Tracker, onDone: (Long) -> Unit = {}) = viewModelScope.launch(io) {
         val existing = if (tracker.id == 0L) db.trackerDao().getAll().firstOrNull { it.type == tracker.type } else null
         val toSave = if (existing != null) tracker.copy(id = existing.id) else tracker
         val id = db.trackerDao().upsert(toSave)
         TrackerAlarms.reschedule(getApplication(), db)
-        onDone(if (toSave.id == 0L) id else toSave.id)
+        ui { onDone(if (toSave.id == 0L) id else toSave.id) }
     }
 
-    fun deleteTracker(id: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun deleteTracker(id: Long, onDone: () -> Unit = {}) = viewModelScope.launch(io) {
         db.trackerDao().deleteEntriesOf(id)
         db.trackerDao().delete(id)
         TrackerAlarms.reschedule(getApplication(), db)
-        onDone()
+        ui { onDone() }
     }
 
-    fun addTrackerEntry(entry: TrackerEntry, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun addTrackerEntry(entry: TrackerEntry, onDone: () -> Unit = {}) = viewModelScope.launch(io) {
         db.trackerDao().upsertEntry(entry)
         TrackerAlarms.reschedule(getApplication(), db)
-        onDone()
+        ui { onDone() }
     }
 
-    fun deleteTrackerEntry(id: Long) = viewModelScope.launch {
+    fun deleteTrackerEntry(id: Long, onDone: (TrackerEntry?) -> Unit = {}) = viewModelScope.launch(io) {
+        val snapshot = db.trackerDao().getAllEntries().firstOrNull { it.id == id }
         db.trackerDao().deleteEntry(id)
+        ui { onDone(snapshot) }
     }
+
+    fun restoreTrackerEntry(entry: TrackerEntry) = viewModelScope.launch(io) { db.trackerDao().upsertEntry(entry.copy(id = 0)) }
 
     // ---------- Бэкап и отчёт ----------
 
-    suspend fun exportJson(): String = Backup.exportJson(db)
+    suspend fun exportJson(): String = Backup.exportJson(db, Settings(getApplication()).exportMap())
 
     suspend fun exportDosesCsv(): String = Backup.dosesCsv(db)
 
     suspend fun exportTrackersCsv(): String = Backup.trackersCsv(db)
 
     /** Восстановление из JSON: стирает всё одной транзакцией и пересобирает будильники. */
-    fun importBackup(json: String, onDone: (ImportOutcome) -> Unit) = viewModelScope.launch {
+    fun importBackup(json: String, onDone: (ImportOutcome) -> Unit) = viewModelScope.launch(io) {
+        val settings = Settings(getApplication())
         val outcome = try {
-            Backup.importJson(db, json)
+            // Будильники старых приёмов снимаем до очистки базы: после импорта их id достанутся
+            // другим приёмам, и звонок пришёл бы не о той таблетке.
+            planner.cancelAllDoseAlarms()
+            Backup.importJson(db, json) { values -> settings.importMap(values) }
             ImportOutcome.OK
         } catch (_: BackupTooNewException) {
             ImportOutcome.TOO_NEW
+        } catch (_: NotABackupException) {
+            ImportOutcome.NOT_BACKUP
         } catch (_: Exception) {
             ImportOutcome.FAILED
         }
@@ -467,7 +542,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             VisitAlarms.reschedule(getApplication(), db)
             TrackerAlarms.reschedule(getApplication(), db)
         }
-        onDone(outcome)
+        ui { onDone(outcome) }
     }
 
     /**
@@ -517,36 +592,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Кнопка «Подъём»: новый день плюс запись сна, если перед этим нажимали «Сон». */
-    fun wakeUp() = viewModelScope.launch {
+    fun wakeUp() = viewModelScope.launch(io) {
         val now = System.currentTimeMillis()
         planner.wakeUp(now)
         logSleepIfPending(now)
     }
 
     /** «Начать новый день» и ручной сброс: только пересборка дня, без записи сна — человек не спал. */
-    fun restartDay() = viewModelScope.launch {
+    fun restartDay() = viewModelScope.launch(io) {
         Settings(getApplication()).pendingSleepStart = 0L
         planner.wakeUp(System.currentTimeMillis())
     }
 
     /** «Сон»: запоминаем момент, сама запись появится при пробуждении. */
-    fun goToBed(now: Long = System.currentTimeMillis()) = viewModelScope.launch {
+    fun goToBed(now: Long = System.currentTimeMillis()) = viewModelScope.launch(io) {
         // Момент нужен и трекеру сна (при пробуждении), и истории дня.
         Settings(getApplication()).pendingSleepStart = now
         planner.goToBed(now)
     }
 
     /** «Еда»: фиксируем еду и запускаем приёмы, которые её ждали. */
-    fun recordMeal() = viewModelScope.launch { planner.recordMeal() }
+    /** «Еда»: возвращает записанный момент — снекбар «Вернуть» должен знать, что убирать. */
+    fun recordMeal(onDone: (Long) -> Unit = {}) = viewModelScope.launch(io) {
+        val at = System.currentTimeMillis()
+        planner.recordMeal(at)
+        ui { onDone(at) }
+    }
+
+    /** Отмена «Сон»: день снова идёт. */
+    fun undoBedtime() = viewModelScope.launch(io) { planner.undoBedtime() }
 
     /** Ошибочная отметка еды убирается из журнала. */
-    fun deleteMeal(atMillis: Long) = viewModelScope.launch {
+    fun deleteMeal(atMillis: Long) = viewModelScope.launch(io) {
         db.mealDao().deleteAt(atMillis)
         planner.rescheduleAlarms()
     }
 
+    /** Вернуть ошибочно убранную отметку «Еда». */
+    fun restoreMeal(atMillis: Long) = viewModelScope.launch(io) {
+        db.mealDao().insert(MealEvent(atMillis = atMillis))
+        planner.rescheduleAlarms()
+    }
+
     /** Оценка сна и пробуждения для записи, собранной кнопками. */
-    fun rateSleep(entry: TrackerEntry, sleep: Int, wake: Int) = viewModelScope.launch {
+    fun rateSleep(entry: TrackerEntry, sleep: Int, wake: Int) = viewModelScope.launch(io) {
         db.trackerDao().upsertEntry(
             entry.copy(
                 value = sleep.toDouble(),
@@ -582,7 +671,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             auto = true,
         )
         val id = db.trackerDao().upsertEntry(entry)
-        sleepToRate.value = entry.copy(id = id)
+        // Диалог поднимаем только если знаем ночь: иначе каждое утро экран встречает модальным
+        // окном вместо списка таблеток. Неоценённую автозапись можно оценить кнопкой в трекере.
+        if (known) sleepToRate.value = entry.copy(id = id)
     }
 
     /** Ночи из истории («лёг» + «проснулся»), которых ещё нет в трекере сна. */
@@ -598,7 +689,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Перенести ночи из истории в трекер сна — без оценок, их можно проставить позже. */
-    fun importSleepHistory(trackerId: Long, nights: List<Pair<Long, Long>>) = viewModelScope.launch {
+    fun importSleepHistory(trackerId: Long, nights: List<Pair<Long, Long>>) = viewModelScope.launch(io) {
         nights.forEach { (bed, wake) ->
             db.trackerDao().upsertEntry(
                 TrackerEntry(
@@ -613,40 +704,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun take(doseId: Long) = viewModelScope.launch { planner.markTaken(doseId) }
+    fun take(doseId: Long) = viewModelScope.launch(io) { planner.markTaken(doseId) }
 
     /** Отметить приём прошлого дня из журнала: время — плановое, иначе история поедет. */
-    fun takeAt(doseId: Long, at: Long) = viewModelScope.launch { planner.markTaken(doseId, at) }
+    fun takeAt(doseId: Long, at: Long) = viewModelScope.launch(io) { planner.markTaken(doseId, at) }
 
-    fun skip(doseId: Long) = viewModelScope.launch { planner.markSkipped(doseId) }
+    fun skip(doseId: Long) = viewModelScope.launch(io) { planner.markSkipped(doseId) }
 
-    fun undo(doseId: Long) = viewModelScope.launch { planner.undo(doseId) }
+    fun undo(doseId: Long) = viewModelScope.launch(io) { planner.undo(doseId) }
 
     /** «Отложить» с карточки: момент живёт в приёме, как и у кнопки в шторке. */
-    fun snooze(doseId: Long, minutes: Int) = viewModelScope.launch { planner.snooze(doseId, minutes) }
+    fun snooze(doseId: Long, minutes: Int) = viewModelScope.launch(io) { planner.snooze(doseId, minutes) }
 
     /** «Принять сейчас»: возвращает id записи для снекбара с отменой. */
-    fun takeNow(medId: Long, onDone: (Long) -> Unit = {}) = viewModelScope.launch {
+    fun takeNow(medId: Long, onDone: (Long) -> Unit = {}) = viewModelScope.launch(io) {
         planner.takeNow(medId)?.let(onDone)
     }
 
     /** Отмена «Принять сейчас»: запись удаляется, остаток возвращается. */
-    fun deleteIntake(doseId: Long) = viewModelScope.launch { planner.deleteIntake(doseId) }
+    fun deleteIntake(doseId: Long) = viewModelScope.launch(io) { planner.deleteIntake(doseId) }
 
     /** «Выпить всё, что пора»: возвращает отмеченные id для снекбара с отменой. */
-    fun takeAllDue(onDone: (List<Long>) -> Unit = {}) = viewModelScope.launch {
-        onDone(planner.takeAllDue())
+    fun takeAllDue(onDone: (List<Long>) -> Unit = {}) = viewModelScope.launch(io) {
+        val marked = planner.takeAllDue()
+        ui { onDone(marked) }
     }
 
     /** Сохранить новый порядок таблеток после перетаскивания. */
-    fun saveMedOrder(orderedIds: List<Long>) = viewModelScope.launch {
+    fun saveMedOrder(orderedIds: List<Long>) = viewModelScope.launch(io) {
         orderedIds.forEachIndexed { index, id ->
             db.medicationDao().setSortOrder(id, index)
         }
     }
 
     /** Копия таблетки: у людей часто 2–3 препарата по одной схеме. */
-    fun duplicateMed(medId: Long, onDone: (Long) -> Unit = {}) = viewModelScope.launch {
+    fun duplicateMed(medId: Long, onDone: (Long) -> Unit = {}) = viewModelScope.launch(io) {
         val med = db.medicationDao().getById(medId) ?: return@launch
         val order = db.medicationDao().getActive().maxOfOrNull { it.sortOrder } ?: 0
         val id = db.medicationDao().insert(
@@ -654,22 +746,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 id = 0,
                 name = med.name + " (" + Lang.s.copySuffix + ")",
                 sortOrder = order + 1,
-                stockCount = null,
+                // Остаток копируется вместе со схемой: заводить копию и сразу терять учёт упаковки бессмысленно.
+                stockCount = med.stockCount,
             ),
         )
         planner.refreshMedToday(id)
-        onDone(id)
+        ui { onDone(id) }
     }
 
     /** Завершить курс: таблетка уходит с главной, её приёмы и будильники снимаются, дети отвязываются. */
-    fun finishCourse(medId: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun finishCourse(medId: Long, onDone: () -> Unit = {}) = viewModelScope.launch(io) {
         planner.finishCourse(medId)
-        onDone()
+        ui { onDone() }
     }
 
     suspend fun load(medId: Long): Medication? = db.medicationDao().getById(medId)
 
-    fun save(med: Medication, onDone: (Long) -> Unit = {}) = viewModelScope.launch {
+    fun save(med: Medication, onDone: (Long) -> Unit = {}) = viewModelScope.launch(io) {
+        savedMedName.value = med.name
         val groupId = if (med.groupId > 0) med.groupId else planner.ensureDefaultGroup()
         val toSave = med.copy(groupId = groupId)
         val id = if (toSave.id == 0L) {
@@ -687,16 +781,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     form = toSave.form,
                     doseInfo = toSave.doseInfo,
                     startEpochDay = toSave.cycleStartEpochDay,
-                    endEpochDay = if (toSave.durationDays > 0) toSave.cycleStartEpochDay + toSave.durationDays else null,
+                    // Последний день курса, а не следующий за ним: isExpiredOn срабатывает уже на start + duration.
+                    endEpochDay = courseEndDay(toSave.cycleStartEpochDay, toSave.durationDays),
                 ),
             )
         }
-        onDone(id)
+        ui { onDone(id) }
     }
 
+    /** Архив: таблетки, снятые с расписания. */
+    val archived: StateFlow<List<Medication>> =
+        db.medicationDao().observeArchived().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    fun restoreFromArchive(medId: Long) = viewModelScope.launch(io) { planner.restoreFromArchive(medId) }
+
+    fun purgeFromArchive(medId: Long) = viewModelScope.launch(io) { planner.purgeFromArchive(medId) }
+
     /** Удаление с главной — то же, что завершение курса: деактивация с уборкой приёмов и связей. */
-    fun delete(medId: Long, onDone: () -> Unit = {}) = viewModelScope.launch {
+    fun delete(medId: Long, onDone: () -> Unit = {}) = viewModelScope.launch(io) {
         planner.finishCourse(medId)
-        onDone()
+        ui { onDone() }
     }
 }

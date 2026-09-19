@@ -55,6 +55,14 @@ interface MedicationDao {
 
     @Query("UPDATE medications SET active = 0 WHERE id = :id")
     suspend fun deactivate(id: Long)
+
+    /** Архив: снятые с расписания таблетки — закончившийся курс, «завершить курс», удаление с главной. */
+    @Query("SELECT * FROM medications WHERE active = 0 ORDER BY name")
+    fun observeArchived(): Flow<List<Medication>>
+
+    /** Полное удаление записи о таблетке; история приёмов живёт своим снимком названия. */
+    @Query("DELETE FROM medications WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }
 
 @Dao

@@ -9,6 +9,7 @@ import tech.unispace.pillreminder.alarm.Notifications
 import tech.unispace.pillreminder.data.AppDatabase
 import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.ui.Lang
+import tech.unispace.pillreminder.ui.theme.ThemeMode
 import tech.unispace.pillreminder.data.Planner
 
 /** Мини-контейнер вместо DI-фреймворка: зависимостей немного. */
@@ -24,6 +25,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         Lang.code = Settings(this).language
+        ThemeMode.code = Settings(this).theme
         container = AppContainer(this)
         Notifications.createChannels(this)
         // Расписание «по часам» и будильники не должны ждать, пока пользователь что-то нажмёт; параллельный вызов из BootReceiver безопасен — Planner сериализует мутации мьютексом.

@@ -113,6 +113,8 @@ object Notifications {
     fun show(
         context: Context,
         doseId: Long,
+        /** Плановое время приёма: полноэкранный будильник показывает его, а не застывшие часы. */
+        plannedAt: Long = 0L,
         title: String,
         text: String,
         useAlarmChannel: Boolean,
@@ -143,9 +145,10 @@ object Notifications {
             .setStyle(NotificationCompat.BigTextStyle().bigText(fullText))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            // Публичная видимость: на заблокированном экране контент не скрывается,
-            // иначе некоторые оболочки не показывают полноэкранный интент.
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            // На заблокированном экране показываем обезличенную копию: системная настройка
+            // «скрывать содержимое» обязана работать, а полноэкранный интент от неё не зависит.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(redactedVersion(context, useAlarmChannel, doseId))
             .setAutoCancel(true)
             // Каждый повтор должен снова звучать, а не появляться молча.
             .setOnlyAlertOnce(false)
@@ -153,12 +156,14 @@ object Notifications {
         if (withActions) {
             builder
                 .addAction(R.drawable.ic_pill, Lang.s.took, took)
-                .addAction(R.drawable.ic_pill, Lang.s.skip, skipped)
+                // «Пропустить» с заблокированного экрана требует разблокировки: чужой человек
+                // не должен уметь снять напоминание о лекарстве.
+                .addAction(protectedAction(R.drawable.ic_pill, Lang.s.skip, skipped))
                 .addAction(R.drawable.ic_pill, Lang.s.snoozeAction(snoozeMin), snoozed)
         }
 
         if (fullScreen) {
-            val alarmIntent = alarmIntent(context, doseId, longArrayOf(doseId), title, fullText, attempt)
+            val alarmIntent = alarmIntent(context, doseId, longArrayOf(doseId), title, fullText, attempt, plannedAt)
             builder.setFullScreenIntent(activityIntent(context, doseId, alarmIntent), true)
             launchIfUnlocked(context, alarmIntent)
         }
@@ -171,7 +176,15 @@ object Notifications {
         listOfNotNull(text.takeIf { it.isNotBlank() }, if (attempt > 0) Lang.s.reminderN(attempt + 1) else null)
             .joinToString("\n")
 
-    private fun alarmIntent(context: Context, id: Long, ids: LongArray, title: String, text: String, attempt: Int): Intent =
+    private fun alarmIntent(
+        context: Context,
+        id: Long,
+        ids: LongArray,
+        title: String,
+        text: String,
+        attempt: Int,
+        plannedAt: Long = 0L,
+    ): Intent =
         Intent(context, AlarmActivity::class.java)
             .setData(Uri.parse("pill://fullscreen/" + id))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -273,7 +286,8 @@ object Notifications {
             .setStyle(NotificationCompat.BigTextStyle().bigText(fullText))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(redactedVersion(context, useAlarmChannel, leaderId))
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
             .setContentIntent(
@@ -285,11 +299,24 @@ object Notifications {
                 ),
             )
             .addAction(R.drawable.ic_pill, Lang.s.takeAllAction, takeAll)
-            .addAction(R.drawable.ic_pill, Lang.s.skipAllAction, skipAll)
-            .addAction(R.drawable.ic_pill, Lang.s.snoozeAction(snoozeMin), action(context, leaderId, ActionReceiver.ACTION_SNOOZE, "snooze"))
+            .addAction(protectedAction(R.drawable.ic_pill, Lang.s.skipAllAction, skipAll))
+            // Откладываем всю группу: раньше уезжал только ведущий приём, а остальные звонили снова.
+            .addAction(
+                R.drawable.ic_pill,
+                Lang.s.snoozeAction(snoozeMin),
+                PendingIntent.getBroadcast(
+                    context,
+                    leaderId.toInt(),
+                    Intent(context, ActionReceiver::class.java)
+                        .setAction(ActionReceiver.ACTION_SNOOZE_GROUP)
+                        .setData(Uri.parse("pill://groupsnooze/" + leaderId))
+                        .putExtra(ActionReceiver.EXTRA_DOSE_IDS, ids),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
 
         if (fullScreen) {
-            val alarmIntent = alarmIntent(context, leaderId, ids, title, fullText, attempt)
+            val alarmIntent = alarmIntent(context, leaderId, ids, title, fullText, attempt, doses.first().plannedAt)
             builder.setFullScreenIntent(activityIntent(context, leaderId, alarmIntent), true)
             launchIfUnlocked(context, alarmIntent)
         }
@@ -297,6 +324,8 @@ object Notifications {
     }
 
     fun showVisit(context: Context, visitId: Long, title: String, whenText: String) {
+        // Врач и адрес клиники — не менее личные данные, чем название таблетки.
+        val text = if (Settings(context).privateNotifications) whenText else title + " · " + whenText
         val open = PendingIntent.getActivity(
             context,
             (VISIT_ID_BASE + visitId).toInt(),
@@ -306,8 +335,8 @@ object Notifications {
         val builder = NotificationCompat.Builder(context, CHANNEL_VISITS)
             .setSmallIcon(R.drawable.ic_pill)
             .setContentTitle(Lang.s.visitNotifTitle)
-            .setContentText(title + " · " + whenText)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(title + " · " + whenText))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setAutoCancel(true)
@@ -320,10 +349,12 @@ object Notifications {
      * сработавшие в одну минуту, перезаписывают одну карточку, а не выкладывают стопку.
      */
     fun showTrackers(context: Context, title: String, text: String) {
+        // Какие именно показатели ведут — тоже данные о здоровье.
+        val shown = if (Settings(context).privateNotifications) "" else text
         val builder = NotificationCompat.Builder(context, CHANNEL_TRACKERS)
             .setSmallIcon(R.drawable.ic_pill)
             .setContentTitle(title)
-            .setContentText(text)
+            .setContentText(shown)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
@@ -338,13 +369,48 @@ object Notifications {
         notifySafely(context, TRACKERS_ID, builder)
     }
 
-    fun showLowStock(context: Context, medId: Long, name: String, left: Double, form: String) {
+    /**
+     * Курс закончился и таблетка ушла в архив. Раньше это происходило молча: человек замечал только
+     * по исчезнувшей карточке, а недопитый курс антибиотика — это не мелочь.
+     */
+    fun showCourseDone(context: Context, medId: Long, name: String) {
+        if (!Settings(context).notifyCourseDone) return
         val s = Lang.s
+        val private = Settings(context).privateNotifications
+        val builder = NotificationCompat.Builder(context, defaultChannelId(context))
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(s.courseDoneTitle)
+            .setContentText(if (private) s.courseDoneBodyPrivate else s.courseDoneBody(name))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(if (private) s.courseDoneBodyPrivate else s.courseDoneBody(name)))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    (COURSE_DONE_ID_BASE + medId).toInt(),
+                    // Ведём в архив: из шторки человек хочет посмотреть, что именно убралось,
+                    // и решить — вернуть в расписание или удалить совсем.
+                    Intent(context, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        .putExtra(MainActivity.EXTRA_OPEN_ARCHIVE, true),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        notifySafely(context, (COURSE_DONE_ID_BASE + medId).toInt(), builder)
+    }
+
+    fun showLowStock(context: Context, medId: Long, name: String, left: Double, form: String) {
+        if (!Settings(context).notifyLowStock) return
+        val s = Lang.s
+        // Режим конфиденциальности прячет название и здесь: «Ксарелто: осталось 4» в шторке —
+        // такая же утечка, как название в напоминании о приёме.
+        val private = Settings(context).privateNotifications
         // Остаток словами по форме выпуска («4 таблетки», «12 капель»), как везде в приложении.
         val builder = NotificationCompat.Builder(context, defaultChannelId(context))
             .setSmallIcon(R.drawable.ic_pill)
             .setContentTitle(s.lowStockTitle)
-            .setContentText(s.lowStockBody(name, s.pills(left, form)))
+            .setContentText(if (private) s.lowStockPrivate else s.lowStockBody(name, s.pills(left, form)))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(
@@ -387,6 +453,40 @@ object Notifications {
         }
     }
 
+    /**
+     * Обезличенная копия для экрана блокировки: видно, что пора принять лекарство, но не какое.
+     * Показывается, когда владелец включил системное «скрывать содержимое уведомлений».
+     */
+    private fun redactedVersion(context: Context, useAlarmChannel: Boolean, doseId: Long) =
+        NotificationCompat.Builder(
+            context,
+            if (useAlarmChannel) alarmChannelId(context) else defaultChannelId(context),
+        )
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(Lang.s.timeToTakeFallback)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            // Копия для экрана блокировки обязана работать: без перехода и кнопки «Выпито»
+            // напоминание превращалось в строку, по которой нельзя ничего сделать.
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    doseId.toInt(),
+                    Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .addAction(R.drawable.ic_pill, Lang.s.took, action(context, doseId, ActionReceiver.ACTION_TAKEN, "taken"))
+            .build()
+
+    /**
+     * Действие, которое меняет историю приёмов, — только после разблокировки (Android 12+).
+     * «Выпито» и «Отложить» остаются быстрыми: их жмут именно с заблокированного экрана.
+     */
+    private fun protectedAction(icon: Int, title: String, intent: PendingIntent): NotificationCompat.Action =
+        NotificationCompat.Action.Builder(icon, title, intent)
+            .setAuthenticationRequired(true)
+            .build()
+
     private fun action(context: Context, doseId: Long, action: String, path: String): PendingIntent =
         PendingIntent.getBroadcast(
             context,
@@ -398,6 +498,80 @@ object Notifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
+    /**
+     * «Вернуть» после «Пропустить все»: в шторке отмена одним касанием невозможна, поэтому сразу
+     * после массового пропуска показываем короткое уведомление с возвратом.
+     */
+    fun showUndoSkip(context: Context, ids: LongArray) {
+        val builder = NotificationCompat.Builder(context, defaultChannelId(context))
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(Lang.s.skippedAllTitle(ids.size))
+            .setContentText(Lang.s.skippedAllBody)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setTimeoutAfter(UNDO_TIMEOUT_MS)
+            .addAction(
+                R.drawable.ic_pill,
+                Lang.s.undo,
+                PendingIntent.getBroadcast(
+                    context,
+                    UNDO_SKIP_ID,
+                    Intent(context, ActionReceiver::class.java)
+                        .setAction(ActionReceiver.ACTION_UNDO_SKIP)
+                        .setData(Uri.parse("pill://undoskip/" + ids.joinToString("-")))
+                        .putExtra(ActionReceiver.EXTRA_DOSE_IDS, ids),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        notifySafely(context, UNDO_SKIP_ID, builder)
+    }
+
+    fun dismissUndoSkip(context: Context) {
+        NotificationManagerCompat.from(context).cancel(UNDO_SKIP_ID)
+    }
+
+    /**
+     * Утреннее «Проснулись?»: с кнопкой «Подъём» день начинается прямо из шторки, без открытия
+     * приложения и поиска кнопки на экране.
+     */
+    fun showWakeReminder(context: Context, id: Long, title: String, text: String, useAlarmChannel: Boolean) {
+        val builder = NotificationCompat.Builder(
+            context,
+            if (useAlarmChannel) alarmChannelId(context) else defaultChannelId(context),
+        )
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    id.toInt(),
+                    Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .addAction(
+                R.drawable.ic_pill,
+                Lang.s.wakeAction,
+                PendingIntent.getBroadcast(
+                    context,
+                    id.toInt(),
+                    Intent(context, ActionReceiver::class.java)
+                        .setAction(ActionReceiver.ACTION_WAKE)
+                        .setData(Uri.parse("pill://wake")),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        notifySafely(context, id.toInt(), builder)
+    }
+
+    fun dismissWakeReminder(context: Context) {
+        NotificationManagerCompat.from(context).cancel(WakeReminderReceiver.WAKE_NOTIF_ID.toInt())
+    }
+
     fun dismiss(context: Context, doseId: Long) {
         NotificationManagerCompat.from(context).cancel(doseId.toInt())
     }
@@ -405,4 +579,11 @@ object Notifications {
     private const val VISIT_ID_BASE = 500_000L
     private const val DAY_DONE_ID = 900_001
     private const val TRACKERS_ID = 820_000
+
+    /** Уведомления «курс закончился»: свой диапазон, чтобы не перезаписать «таблетки заканчиваются». */
+    private const val COURSE_DONE_ID_BASE = 710_000L
+
+    /** Уведомление «Пропущено N приёмов · Вернуть» и его время жизни. */
+    private const val UNDO_SKIP_ID = 900_002
+    private const val UNDO_TIMEOUT_MS = 5 * 60_000L
 }

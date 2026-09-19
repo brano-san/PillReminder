@@ -65,6 +65,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import kotlinx.coroutines.launch
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -73,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,6 +88,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -100,6 +106,7 @@ import tech.unispace.pillreminder.data.TrackerType
 import tech.unispace.pillreminder.data.askTimesList
 import tech.unispace.pillreminder.data.today
 import java.time.Instant
+import androidx.activity.compose.BackHandler
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -181,11 +188,11 @@ fun LineChart(
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
 
     Canvas(modifier) {
-        val labelPad = if (showGrid) 44f else 0f
+        val labelPad = if (showGrid) chartTextPx(10f) * 1.7f else 0f
         val chartWidth = size.width - labelPad
         val padY = size.height * 0.08f
         val hasXLabels = showGrid && xLabels.size == values.size && values.size >= 2
-        val bottomPad = if (hasXLabels) X_LABELS_PAD else 0f
+        val bottomPad = if (hasXLabels) xLabelsPad() else 0f
         val usable = size.height - padY * 2 - bottomPad
         val min = range?.start ?: values.minOrNull() ?: 0.0
         val max = range?.endInclusive ?: values.maxOrNull() ?: 1.0
@@ -197,7 +204,7 @@ fun LineChart(
         // так виден масштаб, а пустой блок не выглядит сломанным.
         val paint = android.graphics.Paint().apply {
             isAntiAlias = true
-            textSize = 26f
+            textSize = chartTextPx(10f)
             this.color = labelColor
         }
         for (i in 0..3) {
@@ -212,7 +219,7 @@ fun LineChart(
                 }
             } else {
                 drawLine(gridColor, Offset(labelPad, y), Offset(size.width, y), strokeWidth = 1.5f)
-                drawContext.canvas.nativeCanvas.drawText(trimNum(min + span * frac), 0f, y + 9f, paint)
+                drawContext.canvas.nativeCanvas.drawText(trimNum(min + span * frac), 0f, y + paint.textSize / 3f, paint)
             }
         }
 
@@ -278,8 +285,15 @@ fun chartRange(type: String, values: List<Double>): ClosedFloatingPointRange<Dou
     else -> 0.0..5.0
 }
 
+/**
+ * Размер подписи графика в пикселях. Задаётся в sp — иначе при системном «крупном шрифте»
+ * весь текст приложения растёт, а цифры на графике остаются прежними. Масштаб ограничен
+ * сверху: при «очень крупном» подписи дат налезали бы друг на друга.
+ */
+fun Density.chartTextPx(sp: Float): Float = sp * density * fontScale.coerceIn(1f, 1.3f)
+
 /** Высота полосы под подписи дат по оси X. */
-const val X_LABELS_PAD = 34f
+fun Density.xLabelsPad(): Float = chartTextPx(9f) * 1.5f
 
 /** Подписи по оси X: первая, последняя и до трёх промежуточных, чтобы не налезали. */
 fun DrawScope.drawXLabels(labels: List<String>, left: Float, width: Float, colorArgb: Int) {
@@ -287,7 +301,7 @@ fun DrawScope.drawXLabels(labels: List<String>, left: Float, width: Float, color
     if (n < 2) return
     val paint = android.graphics.Paint().apply {
         isAntiAlias = true
-        textSize = 24f
+        textSize = chartTextPx(9f)
         color = colorArgb
     }
     val stepX = width / (n - 1)
@@ -298,7 +312,7 @@ fun DrawScope.drawXLabels(labels: List<String>, left: Float, width: Float, color
             n - 1 -> android.graphics.Paint.Align.RIGHT
             else -> android.graphics.Paint.Align.CENTER
         }
-        drawContext.canvas.nativeCanvas.drawText(labels[i], left + stepX * i, size.height - 6f, paint)
+        drawContext.canvas.nativeCanvas.drawText(labels[i], left + stepX * i, size.height - paint.textSize / 4f, paint)
     }
 }
 
@@ -322,7 +336,7 @@ fun TrackersScreen(
     var addFor by remember { mutableStateOf<Tracker?>(null) }
 
     addFor?.let { tracker ->
-        AddEntryDialog(tracker = tracker, onSave = onAddEntry, onDismiss = { addFor = null })
+        AddEntryDialog(tracker = tracker, lastValue = rows.firstOrNull { it.tracker.id == tracker.id }?.entries?.firstOrNull()?.value, onSave = onAddEntry, onDismiss = { addFor = null })
     }
 
     Column(Modifier.fillMaxSize().padding(top = contentPadding.calculateTopPadding())) {
@@ -387,7 +401,22 @@ private fun TrackerCard(row: TrackerRow, miniPoints: Int, onOpen: (Long) -> Unit
                 Icon(trackerIcon(row.tracker.type), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(trackerDisplayName(row.tracker.type), fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(trackerDisplayName(row.tracker.type), fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    // Само значение, а не только дата: чтобы узнать текущий вес, приходилось открывать трекер.
+                    last?.let { entry ->
+                        Text(
+                            when {
+                                row.tracker.type == TrackerType.WEIGHT -> trimNum(entry.value) + " " + s.kgShort
+                                entry.value > 0 -> MOOD_EMOJI.getOrElse(entry.value.toInt() - 1) { "•" } + " " + entry.value.toInt() + "/5"
+                                else -> ""
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                     Text(
                         last?.let { formatNoteTime(it.atMillis) } ?: s.neverRecorded,
                         style = MaterialTheme.typography.bodySmall,
@@ -451,6 +480,19 @@ fun EditTrackerScreen(
         }
     }
 
+    // Уход со страницы настройки с несохранёнными правками — через вопрос: стрелка «назад»
+    // теряла и время напоминания, и рост одним касанием.
+    val currentState = listOf(type, heightText, sex, askTimes.joinToString(","), remind.toString(), startDay.toString()).joinToString("|")
+    var snapshot by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(loaded) { if (loaded && snapshot == null) snapshot = currentState }
+    val dirty = snapshot != null && snapshot != currentState
+    var confirmDiscard by remember { mutableStateOf(false) }
+    fun requestClose() { if (dirty) confirmDiscard = true else onDone() }
+    if (confirmDiscard) {
+        DiscardChangesDialog(onDiscard = { confirmDiscard = false; onDone() }, onDismiss = { confirmDiscard = false })
+    }
+    BackHandler { requestClose() }
+
     // При создании трекера сна предлагаем перенести уже накопленные ночи из истории.
     // Только при создании: у существующего трекера диалог всплывал бы при каждом открытии настроек.
     var importCandidates by remember { mutableStateOf<List<Pair<Long, Long>>>(emptyList()) }
@@ -474,7 +516,7 @@ fun EditTrackerScreen(
                             askTimes = askTimes.joinToString(","),
                             startEpochDay = startDay,
                             remindEnabled = remind && askTimes.isNotEmpty(),
-                            heightCm = heightText.toIntOrNull()?.coerceIn(50, 250) ?: 0,
+                            heightCm = heightText.toIntOrNull()?.takeIf { it in 50..250 } ?: 0,
                             sex = sex,
                         ),
                     ) { id ->
@@ -528,7 +570,7 @@ fun EditTrackerScreen(
             TopAppBar(
                 title = { Text((if (isNew) s.newTracker else s.editTracker) + " · " + trackerDisplayName(type)) },
                 navigationIcon = {
-                    IconButton(onClick = onDone) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back) }
+                    IconButton(onClick = { requestClose() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back) }
                 },
                 actions = {
                     if (!isNew) TextButton(onClick = { confirmDeleteTracker = true }) { Text(s.delete) }
@@ -547,7 +589,7 @@ fun EditTrackerScreen(
                                 askTimes = askTimes.joinToString(","),
                                 startEpochDay = startDay,
                                 remindEnabled = remind && askTimes.isNotEmpty(),
-                                heightCm = heightText.toIntOrNull()?.coerceIn(50, 250) ?: 0,
+                                heightCm = heightText.toIntOrNull()?.takeIf { it in 50..250 } ?: 0,
                                 sex = sex,
                             ),
                         ) { onDone() }
@@ -568,8 +610,11 @@ fun EditTrackerScreen(
                     Text(s.heightSubsection, style = MaterialTheme.typography.titleSmall)
                     OutlinedTextField(
                         value = heightText,
-                        onValueChange = { heightText = it.filter { c -> c.isDigit() } },
+                        onValueChange = { heightText = it.filter { c -> c.isDigit() }.take(3) },
                         label = { Text(s.heightFieldLabel) },
+                        // Рост вне диапазона подсвечивается, а не подгоняется молча.
+                        isError = heightText.isNotEmpty() && heightText.toIntOrNull()?.let { it in 50..250 } != true,
+                        supportingText = { Text(s.rangeHint(50, 250)) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = fieldColors(),
@@ -619,10 +664,7 @@ fun EditTrackerScreen(
                                 onClick = { editAskIndex = i },
                                 label = { Text(hhmm(m), maxLines = 1, softWrap = false) },
                                 trailingIcon = {
-                                    IconButton(
-                                        onClick = { askTimes = askTimes - m },
-                                        modifier = Modifier.size(22.dp),
-                                    ) {
+                                    IconButton(onClick = { askTimes = askTimes - m }) {
                                         Icon(Icons.Default.Close, contentDescription = Lang.s.delete, modifier = Modifier.size(15.dp))
                                     }
                                 },
@@ -713,6 +755,8 @@ fun TrackerDetailScreen(
     onDone: () -> Unit,
 ) {
     val s = Lang.s
+    val scope = rememberCoroutineScope()
+    val snackbars = remember { SnackbarHostState() }
     val row = rows.firstOrNull { it.tracker.id == trackerId }
     // Трекер удалён (например, из экрана настройки) — уходим, а не рисуем пустоту.
     if (row == null) {
@@ -760,11 +804,22 @@ fun TrackerDetailScreen(
     val values = shown.map { it.value }
 
     if (showBmiTable) BmiTableDialog(onDismiss = { showBmiTable = false })
-    if (showAdd) AddEntryDialog(tracker = tracker, onSave = { vm.addTrackerEntry(it) }, onDismiss = { showAdd = false })
+    if (showAdd) AddEntryDialog(tracker = tracker, lastValue = row.entries.firstOrNull()?.value, onSave = { vm.addTrackerEntry(it) }, onDismiss = { showAdd = false })
     deleteEntry?.let { entry ->
         ConfirmDeleteDialog(
             title = trimNum(entry.value) + " · " + formatNoteTime(entry.atMillis),
-            onConfirm = { vm.deleteTrackerEntry(entry.id) },
+            onConfirm = {
+                vm.deleteTrackerEntry(entry.id) { snapshot ->
+                    snapshot?.let { saved ->
+                        scope.launch {
+                            snackbars.currentSnackbarData?.dismiss()
+                            if (snackbars.showSnackbar(s.trackerEntryDeleted, actionLabel = s.undo) == SnackbarResult.ActionPerformed) {
+                                vm.restoreTrackerEntry(saved)
+                            }
+                        }
+                    }
+                }
+            },
             onDismiss = { deleteEntry = null },
         )
     }
@@ -786,7 +841,7 @@ fun TrackerDetailScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        customText.toIntOrNull()?.coerceIn(2, 1000)?.let { window = it }
+                        customText.toIntOrNull()?.let { window = it }
                         customDialog = false
                     },
                 ) { Text(s.done) }
@@ -807,6 +862,7 @@ fun TrackerDetailScreen(
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbars) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showAdd = true },
@@ -954,7 +1010,13 @@ fun TrackerDetailScreen(
                                 TextButton(onClick = { showBmiTable = true }) { Text(s.bmiTable, maxLines = 1, softWrap = false) }
                             }
                             if (tracker.heightCm <= 0) {
-                                Text(s.bmiNeedHeight, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                // Подсказка вела в настройки словами, а не кнопкой: рост так и оставался незаданным.
+                                Column {
+                                    Text(s.bmiNeedHeight, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    TextButton(onClick = onEditTracker, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                                        Text(s.bmiSetHeight, maxLines = 1, softWrap = false)
+                                    }
+                                }
                             } else if (lastWeight != null) {
                                 val h = tracker.heightCm / 100.0
                                 val bmi = lastWeight / (h * h)
@@ -962,10 +1024,10 @@ fun TrackerDetailScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(Modifier.size(14.dp).background(cat.color, RoundedCornerShape(7.dp)))
                                     Spacer(Modifier.width(10.dp))
+                                    // Цвет остаётся у кружка: жёлтый и голубой текст на белом фоне нечитаемы.
                                     Text(
                                         s.bmiValue(String.format(Locale.ROOT, "%.1f", bmi)) + " · " + cat.label,
                                         style = MaterialTheme.typography.titleMedium,
-                                        color = cat.color,
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                 }
@@ -1033,8 +1095,10 @@ private fun EntryRow(
     onRate: (TrackerEntry) -> Unit = {},
 ) {
     val s = Lang.s
+    // Долгое нажатие оставлено, но есть и видимая кнопка: другого пути удалить запись не было,
+    // и нигде об этом не говорилось.
     Card(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { onLongPress(entry) })) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Column(Modifier.padding(start = 16.dp, end = 6.dp, top = 12.dp, bottom = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     when {
@@ -1047,6 +1111,11 @@ private fun EntryRow(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
+                // Видимая кнопка: долгое нажатие было единственным способом убрать ошибочную запись,
+                // и об этом нигде не говорилось.
+                IconButton(onClick = { onLongPress(entry) }) {
+                    Icon(Icons.Default.Close, contentDescription = s.delete, modifier = Modifier.size(18.dp))
+                }
                 Text(formatNoteTime(entry.atMillis), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (tracker.type == TrackerType.SLEEP && entry.sleepStart != null && entry.sleepEnd != null) {
@@ -1111,9 +1180,10 @@ private fun BmiTableDialog(onDismiss: () -> Unit) {
 // ---------- Добавление записи ----------
 
 @Composable
-fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: () -> Unit) {
+fun AddEntryDialog(tracker: Tracker, lastValue: Double? = null, onSave: (TrackerEntry) -> Unit, onDismiss: () -> Unit) {
     val s = Lang.s
-    var weightText by remember { mutableStateOf("") }
+    // Вес меняется на 200–300 граммов: вводить его целиком с нуля каждый раз незачем.
+    var weightText by remember { mutableStateOf(lastValue?.let { trimNum(it) } ?: "") }
     var rating by remember { mutableIntStateOf(3) }
     var note by remember { mutableStateOf("") }
     var date by remember { mutableStateOf(LocalDate.now()) }
@@ -1148,12 +1218,13 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
 
     fun buildEntry(): TrackerEntry? {
         val zone = ZoneId.systemDefault()
-        val at = if (tracker.type == TrackerType.SLEEP) System.currentTimeMillis()
-        else LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli()
+        // Дату выбирают и для сна: вечером вспомнил про позавчерашнюю ночь — запись ложилась на сегодня.
+        val at = LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli()
         return when (tracker.type) {
             TrackerType.WEIGHT -> {
                 val w = weightText.replace(',', '.').toDoubleOrNull() ?: return null
-                TrackerEntry(trackerId = tracker.id, atMillis = at, value = w.coerceIn(1.0, 500.0), note = note.trim())
+                // Диапазон проверен кнопкой сохранения — здесь уже корректное значение.
+                TrackerEntry(trackerId = tracker.id, atMillis = at, value = w, note = note.trim())
             }
             TrackerType.MOOD -> TrackerEntry(trackerId = tracker.id, atMillis = at, value = rating.toDouble(), note = note.trim())
             else -> {
@@ -1249,7 +1320,7 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
                 )
 
                 // Время записи — только для веса и настроения; сон пишется «сейчас».
-                if (tracker.type != TrackerType.SLEEP) {
+                run {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.weight(1.3f)) {
                             Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1273,7 +1344,8 @@ fun AddEntryDialog(tracker: Tracker, onSave: (TrackerEntry) -> Unit, onDismiss: 
                         onDismiss()
                     }
                 },
-                enabled = tracker.type != TrackerType.WEIGHT || weightText.replace(',', '.').toDoubleOrNull() != null,
+                enabled = tracker.type != TrackerType.WEIGHT ||
+                    weightText.replace(',', '.').toDoubleOrNull()?.let { it in 1.0..500.0 } == true,
             ) { Text(s.save) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(s.cancel) } },

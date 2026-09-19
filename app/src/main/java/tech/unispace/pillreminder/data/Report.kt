@@ -15,24 +15,57 @@ import java.util.Locale
 object Report {
 
     const val SEC_INTAKES = "intakes"
+    const val SEC_JOURNAL = "journal"
     const val SEC_MEDS = "meds"
     const val SEC_TRACKERS = "trackers"
     const val SEC_NOTES = "notes"
     const val SEC_VISITS = "visits"
     const val SEC_LINKS = "links"
-    val ALL_SECTIONS = setOf(SEC_INTAKES, SEC_MEDS, SEC_TRACKERS, SEC_NOTES, SEC_VISITS, SEC_LINKS)
+    val ALL_SECTIONS = setOf(SEC_INTAKES, SEC_JOURNAL, SEC_MEDS, SEC_TRACKERS, SEC_NOTES, SEC_VISITS, SEC_LINKS)
 
     /**
      * Идёт ли приём в отчёт: за период, уже наступивший (сегодняшние будущие приёмы — не пропуски)
      * и по выбранным таблеткам ([medIds] = null — по всем). Одно правило для отчёта и корреляций.
      */
-    fun includeDose(dose: Dose, fromDay: Long, toDay: Long, now: Long, medIds: Set<Long>? = null): Boolean =
+    fun includeDose(
+        dose: Dose,
+        fromDay: Long,
+        toDay: Long,
+        now: Long,
+        medIds: Set<Long>? = null,
+        /** Приёмы, которые ждут кнопку «Еда»: они ещё не звонили, значит и не пропущены. */
+        waitingIds: Set<Long> = emptySet(),
+    ): Boolean =
         dose.dayEpochDay in fromDay..toDay &&
-            (dose.status != DoseStatus.PENDING || dose.plannedAt < now) &&
+            (dose.status != DoseStatus.PENDING || (dose.plannedAt < now && dose.id !in waitingIds)) &&
             (medIds == null || dose.medId in medIds)
 
     /** Раздел отчёта: заголовок и строки; пустой список строк — данных за период нет. */
     data class Section(val title: String, val lines: List<String>)
+
+    /**
+     * Журнал приёмов по дням. Врач спрашивает «а когда именно пропускали» — один процент
+     * дисциплины на это не отвечает, а до этого раздела в отчёте не было вовсе.
+     */
+    fun journalLines(doses: List<Dose>, names: Map<Long, String>, s: S, dateFmt: DateTimeFormatter): List<String> {
+        val lines = mutableListOf<String>()
+        doses.sortedWith(compareBy({ it.dayEpochDay }, { it.plannedAt }))
+            .groupBy { it.dayEpochDay }
+            .forEach { (day, list) ->
+                val taken = list.count { it.status == DoseStatus.TAKEN }
+                lines += "• " + LocalDate.ofEpochDay(day).format(dateFmt) + " — " + taken + "/" + list.size
+                list.forEach { dose ->
+                    val name = names[dose.medId] ?: dose.medNameSnapshot.ifBlank { "?" }
+                    val status = when (dose.status) {
+                        DoseStatus.TAKEN -> s.repTaken + (dose.takenAt?.let { " " + formatClock(it) } ?: "")
+                        DoseStatus.SKIPPED -> s.repSkipped
+                        else -> s.repMissed
+                    }
+                    lines += "  " + formatClock(dose.plannedAt) + " · " + name + " — " + status
+                }
+            }
+        return lines
+    }
 
     /**
      * Собрать текст из шапки и разделов. При [hideEmpty] разделы без данных пропускаются целиком —
@@ -63,12 +96,22 @@ object Report {
         val fromDay = toDay - days + 1
         val zone = java.time.ZoneId.systemDefault()
         val fromMillis = LocalDate.ofEpochDay(fromDay).atStartOfDay(zone).toInstant().toEpochMilli()
+        // Верхняя граница периода: иначе в отчёт за август попадал визит, назначенный на октябрь.
+        val toMillis = LocalDate.ofEpochDay(toDay).plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val dateFmt = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.ROOT)
 
         // Сегодняшние ещё не наступившие приёмы — не пропуски: считаем так же, как экран истории.
         val now = System.currentTimeMillis()
-        val doses = db.doseDao().getAll().filter { includeDose(it, fromDay, toDay, now, medIds) }
-        val meds = db.medicationDao().getAllIncludingInactive().associateBy { it.id }
+        // Приём, ждущий «Еда», в отчёте не пропуск: будильник по нему ещё не звонил.
+        val todays = db.doseDao().getDay(toDay)
+        val mealTimes = db.mealDao().getAll().map { it.atMillis }
+        val wakeAt = db.wakeDao().getDay(toDay)?.wakeAt
+        val medsAll = db.medicationDao().getAllIncludingInactive().associateBy { it.id }
+        val waiting = todays.filter { d ->
+            d.status == DoseStatus.PENDING && medsAll[d.medId]?.let { !mealSatisfied(it, d, todays, mealTimes, wakeAt) } == true
+        }.map { it.id }.toSet()
+        val doses = db.doseDao().getAll().filter { includeDose(it, fromDay, toDay, now, medIds, waiting) }
+        val meds = medsAll
         val planned = doses.size
         val taken = doses.count { it.status == DoseStatus.TAKEN }
         val skipped = doses.count { it.status == DoseStatus.SKIPPED }
@@ -91,9 +134,21 @@ object Report {
             )
         }
 
+        if (SEC_JOURNAL in sections) {
+            parts += Section(s.repJournal, journalLines(doses, meds.mapValues { it.value.name }, s, dateFmt))
+        }
+
         if (SEC_MEDS in sections) {
             val lines = mutableListOf<String>()
-            doses.groupBy { it.medId }.forEach { (medId, list) ->
+            // Выбранная таблетка без приёмов за период тоже попадает в отчёт: врач должен знать,
+            // что её принимают, даже если в эти дни она не понадобилась.
+            val byMed = doses.groupBy { it.medId }
+            val wanted = medIds ?: meds.values.filter { it.active }.map { it.id }.toSet()
+            (wanted - byMed.keys).mapNotNull { meds[it] }.sortedBy { it.sortOrder }.forEach { med ->
+                lines += "• " + med.name
+                lines += "  " + s.repNoIntakes
+            }
+            byMed.forEach { (medId, list) ->
                 val med = meds[medId]
                 val name = med?.name ?: list.first().medNameSnapshot.ifBlank { "?" }
                 lines += "• $name"
@@ -101,7 +156,7 @@ object Report {
                     val dose = listOf(s.formName(med.form), med.doseInfo).filter { it.isNotBlank() }.joinToString(" ")
                     val schedule = when {
                         med.asNeeded -> s.asNeededShort
-                        med.byClock -> s.byClockShort + " " + med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) }
+                        med.byClock -> s.byClockShort + " " + med.fixedTimesList().joinToString(", ") { String.format(Locale.ROOT, "%02d:%02d", it / 60, it % 60) }
                         med.linkedToMedId != null -> s.afterMed(meds[med.linkedToMedId]?.name ?: "?", s.duration(med.linkedDelayMinutes))
                         else -> s.schedule(med.timesPerDay, med.intervalMinutes, med.everyNDays, med.weekdaysList())
                     }
@@ -118,7 +173,7 @@ object Report {
 
         if (SEC_TRACKERS in sections) {
             val trackers = db.trackerDao().getAll()
-            val entries = db.trackerDao().getAllEntries().filter { it.atMillis >= fromMillis }
+            val entries = db.trackerDao().getAllEntries().filter { it.atMillis in fromMillis until toMillis }
             for (tracker in trackers) {
                 val mine = entries.filter { it.trackerId == tracker.id }
                 val title = when (tracker.type) {
@@ -145,7 +200,11 @@ object Report {
 
         if (SEC_NOTES in sections) {
             val lines = mutableListOf<String>()
-            db.noteDao().observeAllOnce().filter { it.atMillis >= fromMillis }.sortedBy { it.atMillis }.forEach { n ->
+            // Фильтр таблеток действует и на заметки: привязанная к снятой таблетке заметка врачу не нужна.
+            db.noteDao().observeAllOnce()
+                .filter { it.atMillis in fromMillis until toMillis }
+                .filter { medIds == null || it.medId == null || it.medId in medIds }
+                .sortedBy { it.atMillis }.forEach { n ->
                 val date = java.time.Instant.ofEpochMilli(n.atMillis).atZone(zone).toLocalDate().format(dateFmt)
                 lines += "• $date ${formatClock(n.atMillis)} — ${n.title}"
                 if (n.description.isNotBlank()) lines += "  ${n.description}"
@@ -159,7 +218,7 @@ object Report {
 
         if (SEC_VISITS in sections) {
             val lines = mutableListOf<String>()
-            db.visitDao().getAll().filter { it.atMillis >= fromMillis }.sortedBy { it.atMillis }.forEach { v ->
+            db.visitDao().getAll().filter { it.atMillis in fromMillis until toMillis }.sortedBy { it.atMillis }.forEach { v ->
                 val date = java.time.Instant.ofEpochMilli(v.atMillis).atZone(zone).toLocalDate().format(dateFmt)
                 lines += "• $date ${formatClock(v.atMillis)} — ${v.title}" + if (v.place.isNotBlank()) " (${v.place})" else ""
                 if (v.comment.isNotBlank()) lines += "  ${v.comment}"

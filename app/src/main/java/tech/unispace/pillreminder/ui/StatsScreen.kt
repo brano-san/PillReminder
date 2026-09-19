@@ -54,10 +54,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,6 +69,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -72,6 +80,9 @@ import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.alarm.formatAmount
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
+import tech.unispace.pillreminder.data.isMissed
+import tech.unispace.pillreminder.data.JournalAction
+import tech.unispace.pillreminder.data.journalActions
 import tech.unispace.pillreminder.data.today
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -90,15 +101,27 @@ fun StatsScreen(
     /** Отметить приём прошлого дня задним числом: время — плановое. */
     onTakeAt: (doseId: Long, at: Long) -> Unit,
     onSkip: (Long) -> Unit,
-    /** Ошибочная отметка «Еда» убирается долгим нажатием по строке журнала. */
+    /** Ошибочная отметка «Еда» убирается кнопкой в строке журнала. */
     onDeleteMeal: (Long) -> Unit,
+    /** Вернуть ошибочно убранную отметку «Еда». */
+    onRestoreMeal: (Long) -> Unit,
     contentPadding: PaddingValues,
 ) {
     val s = Lang.s
     val pager = rememberPagerState(pageCount = { 2 })
     val scope = rememberCoroutineScope()
     val titles = listOf(s.tabJournal, s.tabCalendar)
+    val snackbars = remember { SnackbarHostState() }
+    // Отметку «Еда» можно вернуть: она открывает приёмы «после еды», и ошибочное удаление сдвигает день.
+    val deleteMeal: (Long) -> Unit = { at ->
+        onDeleteMeal(at)
+        scope.launch {
+            snackbars.currentSnackbarData?.dismiss()
+            if (snackbars.showSnackbar(s.mealDeleted, actionLabel = s.undo) == SnackbarResult.ActionPerformed) onRestoreMeal(at)
+        }
+    }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(top = contentPadding.calculateTopPadding())) {
         TabRow(selectedTabIndex = pager.currentPage) {
             titles.forEachIndexed { index, title ->
@@ -111,7 +134,7 @@ fun StatsScreen(
         }
         HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
             when (page) {
-                0 -> JournalTab(adherence, journal, onSelectDay, onUndo, onTakeAt, onSkip, onDeleteMeal, contentPadding)
+                0 -> JournalTab(adherence, journal, onSelectDay, onUndo, onTakeAt, onSkip, deleteMeal, contentPadding)
                 else -> HeatmapTab(
                     heatmap,
                     journal,
@@ -122,6 +145,8 @@ fun StatsScreen(
                 )
             }
         }
+    }
+        SnackbarHost(snackbars, Modifier.align(Alignment.BottomCenter).padding(bottom = contentPadding.calculateBottomPadding() + 16.dp))
     }
 }
 
@@ -154,7 +179,9 @@ private fun JournalTab(
         }.sortedByDescending { it.at }
     }
 
-    val pastDay = state.day < today()
+    // «Прошлый день» — по дню цикла: после полуночи идущий день ещё не история, и прятать у него
+    // кнопки нельзя. Именно ради этого в приложении плавающий день.
+    val pastDay = state.day < state.cycleDay
     // Правка прошлого дня — намеренно за отдельной кнопкой и подтверждением: история должна оставаться историей.
     // Сбрасывается при смене дня.
     var editPast by remember(state.day) { mutableStateOf(false) }
@@ -170,11 +197,18 @@ private fun JournalTab(
     }
 
     Column(Modifier.fillMaxSize()) {
+        // Какой день открыт: в ленте только буквы и числа, месяц и «сегодня/вчера» были не видны.
+        Text(
+            formatDay(state.day),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 16.dp, top = 8.dp),
+        )
         WeekStrip(selected = state.day, onSelectDay = onSelectDay)
         // Фильтры и правка истории — под иконками справа: лента дня важнее, чем ряд чекбоксов.
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             if (pastDay && state.doses.isNotEmpty()) {
-                IconButton(onClick = { if (!editPast) confirmEdit = true else editPast = false }, modifier = Modifier.size(32.dp)) {
+                IconButton(onClick = { if (!editPast) confirmEdit = true else editPast = false }) {
                     Icon(
                         if (editPast) Icons.Default.EditOff else Icons.Default.Edit,
                         contentDescription = Lang.s.editHistoryBtn,
@@ -186,7 +220,7 @@ private fun JournalTab(
             Box {
                 var filterMenu by remember { mutableStateOf(false) }
                 val allShown = showDoses && showMeals && showSleep
-                IconButton(onClick = { filterMenu = true }, modifier = Modifier.size(32.dp)) {
+                IconButton(onClick = { filterMenu = true }) {
                     Icon(
                         Icons.Default.FilterList,
                         contentDescription = Lang.s.journalFilters,
@@ -239,7 +273,8 @@ private fun JournalTab(
             if (events.isEmpty()) {
                 item(key = "empty") {
                     Text(
-                        Lang.s.noIntakes,
+                        // Скрытое фильтром — не «данных нет»: раньше выключенная галочка выглядела как пустой день.
+                        if (!(showDoses && showMeals && showSleep)) Lang.s.hiddenByFilter else Lang.s.noIntakes,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 12.dp),
@@ -350,13 +385,19 @@ private fun MarkRow(event: JournalEvent.Mark, onDeleteMeal: (Long) -> Unit) {
     if (confirm) {
         ConfirmDeleteDialog(title = s.eventMeal, onConfirm = { onDeleteMeal(event.at) }, onDismiss = { confirm = false })
     }
-    val clickable = if (event.kind == MarkKind.MEAL) Modifier.combinedClickable(onClick = {}, onLongClick = { confirm = true }) else Modifier
-    Card(Modifier.fillMaxWidth().then(clickable)) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(12.dp))
             Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             Text(formatClock(event.at), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Явная кнопка вместо единственного долгого нажатия: о нём нигде не сказано,
+            // а ошибочная «Еда» открывает приёмы «после еды» и сдвигает их план.
+            if (event.kind == MarkKind.MEAL) {
+                IconButton(onClick = { confirm = true }) {
+                    Icon(Icons.Default.Close, contentDescription = s.delete, modifier = Modifier.size(18.dp))
+                }
+            }
         }
     }
 }
@@ -399,9 +440,15 @@ private fun DoseRow(
                 Box(
                     Modifier.width(10.dp).height(10.dp).background(
                         when (dose.status) {
+                            // Те же три состояния, что на карточке и схеме дня: впереди — нейтральный,
+                            // пора — янтарный, просрочен больше двух часов — красный.
                             DoseStatus.TAKEN -> Color(0xFF4CAF50)
-                            DoseStatus.SKIPPED -> Color(0xFFE53935)
-                            DoseStatus.PENDING -> Color(0xFFFFC107)
+                            DoseStatus.SKIPPED -> MaterialTheme.colorScheme.outlineVariant
+                            DoseStatus.PENDING -> when {
+                                isMissed(dose, System.currentTimeMillis()) -> Color(0xFFE53935)
+                                dose.plannedAt <= System.currentTimeMillis() -> Color(0xFFE0A100)
+                                else -> MaterialTheme.colorScheme.outlineVariant
+                            }
                         },
                         CircleShape,
                     ),
@@ -417,19 +464,33 @@ private fun DoseRow(
                     }
                     Text(
                         // Слово «таблетки/капли» — по форме выпуска, как на карточке и в шторке.
-                        label + " · " + Lang.s.planLabel(formatClock(dose.plannedAt)) + " · " + formatAmount(dose.amount, form),
+                        // «план 07:07» печатаем только когда факт отличается от плана.
+                        listOfNotNull(
+                            label,
+                            Lang.s.planLabel(formatClock(dose.plannedAt)).takeIf { dose.takenAt != null && dose.takenAt != dose.plannedAt },
+                            formatAmount(dose.amount, form),
+                        ).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            if (editable) {
+            // Кнопки — по состоянию приёма: выпитому не предлагаем «Выпито», пропущенному — «Пропустить».
+            val actions = journalActions(dose.status, editable, pastDay)
+            if (actions.isNotEmpty()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (dose.status != DoseStatus.PENDING) {
-                        TextButton(onClick = { onUndo(dose.id) }) { Text(Lang.s.undo, maxLines = 1, softWrap = false) }
-                    } else if (pastDay) {
-                        TextButton(onClick = { onSkip(dose.id) }) { Text(Lang.s.skip, maxLines = 1, softWrap = false) }
-                        TextButton(onClick = { onTakeAt(dose.id, dose.plannedAt) }) { Text(Lang.s.took, maxLines = 1, softWrap = false) }
+                    actions.forEach { action ->
+                        when (action) {
+                            JournalAction.TAKE -> TextButton(onClick = { onTakeAt(dose.id, dose.plannedAt) }) {
+                                Text(Lang.s.took, maxLines = 1, softWrap = false)
+                            }
+                            JournalAction.SKIP -> TextButton(onClick = { onSkip(dose.id) }) {
+                                Text(Lang.s.skip, maxLines = 1, softWrap = false)
+                            }
+                            JournalAction.UNDO -> TextButton(onClick = { onUndo(dose.id) }) {
+                                Text(Lang.s.undo, maxLines = 1, softWrap = false)
+                            }
+                        }
                     }
                 }
             }
@@ -525,6 +586,11 @@ private fun HeatmapTab(
             LegendMarker(heatColor(0f), s.legendMissed)
             LegendMarker(Color.Transparent, s.legendToday, border = MaterialTheme.colorScheme.primary)
             LegendMarker(MaterialTheme.colorScheme.surfaceVariant, s.legendNone)
+            // Точки под числом и бледные дни объясняем тут же: раньше их значение надо было угадывать.
+            LegendMarker(Color.White, s.legendDotTaken)
+            LegendMarker(Color.White.copy(alpha = 0.35f), s.legendDotMissed)
+            LegendMarker(Color.Transparent, s.legendDotAhead, border = MaterialTheme.colorScheme.onSurfaceVariant)
+            LegendMarker(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), s.legendFuture)
         }
         // Превью выбранного дня — здесь же, без перехода в журнал: «почему 11-е оранжевое» видно сразу.
         DayPreview(journal, goToJournal)
@@ -549,8 +615,23 @@ private fun LegendMarker(color: Color, label: String, border: Color? = null) {
 /** Доля выпитого → ступень 0…5 (по 20 %): 0 % — красный, 100 % — зелёный. Чистая функция, с тестом. */
 fun heatStep(ratio: Float): Int = (ratio.coerceIn(0f, 1f) * 5).toInt()
 
-/** Цвет клетки по ступени: оттенок от красного (0°) к зелёному (120°) через жёлтый. */
-fun heatColor(ratio: Float): Color = Color.hsv(hue = 24f * heatStep(ratio), saturation = 0.72f, value = 0.78f)
+/**
+ * Цвет клетки по ступени: оттенок от красного (0°) к зелёному (120°) через жёлтый.
+ * Яркость 0,45 выбрана по контрасту: на прежних светлых жёлтом и зелёном белая цифра давала 2,2:1
+ * при норме 4,5:1 — то есть чем лучше дисциплина, тем хуже читался календарь.
+ */
+fun heatColor(ratio: Float): Color {
+    val step = heatStep(ratio)
+    // Светлота растёт вместе с долей выпитого: на одинаковой яркости соседние ступени различались
+    // только оттенком, и месяц читался ровным тёмным полем. Потолок — по контрасту белой цифры.
+    return Color.hsv(hue = 24f * step, saturation = 0.75f, value = 0.33f + 0.028f * step)
+}
+
+/**
+ * Цвет цифры на цветной клетке: белый контрастен только на тёмных оттенках, а зелёный «всё выпито»
+ * светлый — на нём белая цифра почти не читалась. Порог — относительная яркость 0,5.
+ */
+fun heatTextColor(ratio: Float): Color = if (heatColor(ratio).luminance() > 0.5f) Color.Black else Color.White
 
 /** Больше стольких приёмов в день точками не показать — вместо них «4/8». */
 private const val HEAT_DOTS_MAX = 6
@@ -577,7 +658,7 @@ private fun HeatCell(
     }
     val textColor = when {
         isFuture -> scheme.onSurfaceVariant
-        decided -> Color.White
+        decided -> heatTextColor(ratio)
         else -> scheme.onSurface
     }
     val border = when {
@@ -585,13 +666,24 @@ private fun HeatCell(
         isSelected -> Modifier.border(1.5.dp, scheme.onSurface, RoundedCornerShape(8.dp))
         else -> Modifier
     }
+    // Клетка озвучивается целиком: «12 марта, выпито 3 из 4», иначе TalkBack читает только число.
+    val spoken = buildString {
+        append(dayOfMonth)
+        if (heat != null && heat.planned > 0) {
+            append(", ")
+            append(Lang.s.heatCellDesc(heat.taken, heat.planned))
+        }
+        if (isToday) append(", ").append(Lang.s.legendToday)
+    }
     Box(
         modifier
+            .heightIn(min = 44.dp)
             .aspectRatio(1f)
             .alpha(if (isFuture) 0.4f else 1f)
             .background(background, RoundedCornerShape(8.dp))
             .then(border)
-            .clickable { onClick() },
+            .clickable { onClick() }
+            .semantics { contentDescription = spoken },
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -610,9 +702,10 @@ private fun HeatCell(
                             Box(
                                 Modifier.size(4.dp).then(
                                     when (mark) {
-                                        HeatMark.TAKEN -> Modifier.background(Color.White, CircleShape)
-                                        HeatMark.MISSED -> Modifier.background(Color.White.copy(alpha = 0.35f), CircleShape)
-                                        HeatMark.PENDING -> Modifier.border(1.dp, if (decided) Color.White else scheme.onSurfaceVariant, CircleShape)
+                                        // Точки того же цвета, что цифра: на светлой зелёной клетке белые пропадали.
+                                        HeatMark.TAKEN -> Modifier.background(textColor, CircleShape)
+                                        HeatMark.MISSED -> Modifier.background(textColor.copy(alpha = 0.35f), CircleShape)
+                                        HeatMark.PENDING -> Modifier.border(1.dp, if (decided) textColor else scheme.onSurfaceVariant, CircleShape)
                                     },
                                 ),
                             )

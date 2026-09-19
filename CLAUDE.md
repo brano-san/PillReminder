@@ -45,6 +45,11 @@
 
 ## База данных
 
+- Чистые правила планирования и правки истории живут в `data/Schedule.kt` (`planFixedOn`, `courseOver`, `markMoment`,
+  `affectsSchedule`, `isDueNow`, `alarmPlan`, `fixedTimeMillis`, `courseEndDay`, `bedtimeDropCount`, `journalActions`,
+  `mealPruneBefore`) — у каждого есть тест. Новое правило расписания сначала пишется там, потом зовётся из `Planner`.
+- Мутации и чтения из ViewModel идут на `Dispatchers.Default` (`io` в MainViewModel): `Planner` ставит будильники через
+  AlarmManager и обновляет виджет, на главном потоке это видно глазом. `PillWidgetProvider.refresh` — suspend.
 - Схема v6 (1.2.4, выпущена 16.09.2026): **все миграции `MIGRATION_1_2` … `MIGRATION_5_6` зафиксированы** — не менять.
   Новое поле или таблица — `version = 7` + `Migration(6, 7)`; SQL копировать из `app/schemas/…/<version>.json`
   (`createSql`), Room сверяет схему при старте.
@@ -87,7 +92,7 @@
 - Диапазоны requestCode PendingIntent'ов (пересечение = молчаливая перезапись чужого):
   - id дозы (int) — напоминания о приёмах (action-интенты «Выпито/Пропустить/Отложить/Еда» различаются action+data);
   - 500_000+ — уведомления визитов; будильники визитов — `hashCode("visit-$id-$offset")`;
-  - 700_000+ — «таблетки заканчиваются»;
+  - 700_000+ — «таблетки заканчиваются»; 710_000+ — «курс закончился» (архив по истечении курса);
   - 820_000 + trackerId·MAX_ASK_TIMES + slot — будильники трекеров; уведомление трекеров одно, id 820_000
     (`Notifications.showTrackers`, канал `CHANNEL_TRACKERS` обычной важности; кому пора — `trackerSlotAt`/`trackerNeedsEntry`);
     801_001 — напоминание «я проснулся»;
@@ -203,9 +208,15 @@
 - Графики трекеров: `LineChart(range = chartRange(type, values), smooth = Settings.chartSmooth)`.
   Сетка рисуется всегда (в мини-режиме пунктиром), шкала оценок фиксирована 0–5.
 - Тема — статичная палитра в `ui/theme/Theme.kt`, динамические цвета отключены намеренно;
-  `NavigationBar(containerColor = surface, tonalElevation = 0.dp)`.
+  `NavigationBar(containerColor = surface, tonalElevation = 0.dp)`. Выбор «как в системе / светлая / тёмная» живёт
+  в `ThemeMode.code` (память процесса, как `Lang.code`): значение приходит из `Settings.theme` в `App.onCreate`,
+  а экран настроек обязан менять и то, и другое — иначе тема применится только после перезапуска.
 - Переходы NavHost — `EnterTransition.None`/`ExitTransition.None`: fade между вкладками
   «проглатывал» нажатия. Не возвращать анимацию без причины.
+- Дробные числа таблеток и остатка печатаются только через `trimNumber(value)` (ui/Format.kt): округление до сотых
+  и разделитель по языку. Прямой `Double.toString()` даёт «9.400000000000002» после списаний по 0,1.
+- Курс истёк → `archiveExpiredLocked` (деактивация + уведомление «Курс закончился»); ручное удаление и «завершить
+  курс» — через `deactivateLocked`, без уведомления.
 - Количество за приём — только через `Lang.s.pills(amount, med.form)` / `formatAmount(amount, form)`:
   слово зависит от формы выпуска («3 капли», а не «3 таблетки»). Новая форма = ветка в обоих `pills()`.
 - Графики с сеткой (`LineChart(showGrid = true)`, `MultiLineChart`) обязаны получать `xLabels`
@@ -255,10 +266,32 @@
   "Taken", "Take now". Формы без рода («Поел», «Лёг», «Выпил» — нельзя). Форма выпуска в тексте — `s.formName(form)`.
 - Пункт чек-листа доставки `StepCard(done: Boolean?)`: `null` — нейтральный значок для непроверяемого или
   необязательного пункта; красный — только для обязательного и не выданного.
-- История версий — `ui/Changelog.kt`, открывается нажатием на строку версии внизу настроек.
-  Новый релиз = запись сверху с датой; невыпущенная версия — с пустой датой.
+- История версий — `ui/Changelog.kt`, открывается пунктом «Что нового» и нажатием на строку версии внизу настроек
+  (в окне сначала только `CHANGELOG.first()`). Новый релиз = запись сверху с датой; невыпущенная версия — с пустой датой.
+- Меню настроек сгруппировано подписями `SettingsGroup`; новый пункт кладётся в свою группу, а не в конец списка.
+- Служебные уведомления («заканчиваются», «курс закончился», «день закрыт») спрашивают свой выключатель
+  (`Settings.notifyLowStock/notifyCourseDone/notifyDayDone`) на месте отправки. Напоминания о приёмах выключателя не имеют.
+- Деактивированная таблетка не исчезает навсегда: экран архива (`ArchiveScreen`) зовёт `Planner.restoreFromArchive`
+  (курс считается заново от сегодня) и `purgeFromArchive`. Новое поле таблетки, которое нельзя восстанавливать как есть,
+  правится там же.
+- Подписи на `Canvas` (графики) задаются в sp через `Density.chartTextPx`, а не пикселями: иначе системный крупный
+  шрифт не действует на цифры графика.
 - Главная имеет два режима карточек (`Settings.homeCompact`); новая информация на
   карточке должна учитывать оба.
+
+## UI/UX & Compose Guidelines
+
+### UI & Layout Rules:
+- **No text truncation bugs:** Never allow multi-line chips to break words mid-letter. Always specify `maxLines = 1`, `softWrap = false`, and appropriate text overflow or use flexible 2x2 grids.
+- **Progressive Disclosure:** Do NOT show numeric TextFields (like custom quantity) if a preset chip is selected. Only show manual input fields when "Другое / Свой вариант" is active.
+- **Visual Feedback:** All preview cards (e.g. Step 3 in wizard) must use the actual domain Card composable with sample state.
+- **Touch Targets:** Minimum 48.dp for all clickable elements.
+- **Safe Area & AppBars:** Always respect Scaffold contentPadding and WindowInsets. Never let scrolled content go under transparent status bars without solid elevation/background.
+
+### Compose Code Quality:
+- Use Material 3 (`androidx.compose.material3`) tokens for colors and typography; avoid hardcoded hex colors.
+- Mark all UI state classes with `@Immutable` or `@Stable`.
+- Avoid passing raw ViewModels deep into the component tree; pass state and event lambdas.
 
 ## Документация рядом с кодом
 
@@ -276,6 +309,9 @@
   `mealSatisfied`, `currentSet`, `setStatuses`, `streakDays`, `buildTimelineNodes`/`timelinePillLabel`, `amountFact`,
   `visitReminderMoments`, `WidgetStyle`. Новая чистая функция = тест
   рядом в `app/src/test/java/…` (тот же пакет). Compose и Room в юнит-тестах недоступны — логику из них выносить.
+- Инструментальные тесты (`app/src/androidTest`): миграции с каждой версии (`MigrationTest`) и круговорот бэкапа
+  (`BackupRoundTripTest`). Компилируются в CI (`assembleDebugAndroidTest`), запускаются на устройстве
+  (`connectedDebugAndroidTest`). Меняешь схему или `Backup` — правь их в том же коммите.
 - Неиспользуемые ключи `S` удаляются (скрипт-проверка: ключ не встречается как `.key` вне Lang.kt и не нужен
   default-методам интерфейса). Мёртвые строки требуют перевода при каждой правке и вводят в заблуждение.
 

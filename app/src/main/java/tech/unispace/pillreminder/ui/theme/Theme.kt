@@ -5,6 +5,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 
 /**
@@ -68,9 +71,25 @@ private val DarkColors = darkColorScheme(
     onErrorContainer = Color(0xFFF9DEDC),
 )
 
+/**
+ * Выбранная тема. Живёт в памяти процесса рядом с `Lang.code` по той же причине: смена в настройках
+ * должна перекрашивать экран сразу, а не при следующем запуске. Значение приходит из `Settings.theme`.
+ */
+object ThemeMode {
+    var code by mutableStateOf("system")
+}
+
+/** Тёмная ли сейчас тема: "system" отдаёт решение системе. */
+@Composable
+fun isDarkTheme(): Boolean = when (ThemeMode.code) {
+    "light" -> false
+    "dark" -> true
+    else -> isSystemInDarkTheme()
+}
+
 @Composable
 fun PillTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = isDarkTheme(),
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(colorScheme = if (darkTheme) DarkColors else LightColors, content = content)

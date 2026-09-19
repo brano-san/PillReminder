@@ -3,6 +3,7 @@
 package tech.unispace.pillreminder.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,6 +67,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -78,6 +82,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -148,19 +153,28 @@ fun RecordsScreen(
     library: List<MedLibraryEntry>,
     onOpenNote: (Long) -> Unit,
     onAddNote: () -> Unit,
-    onDeleteNote: (Long) -> Unit,
+    /** Второй аргумент — «как вернуть»: экран показывает снекбар и зовёт его при нажатии «Вернуть». */
+    onDeleteNote: (Long, ((() -> Unit)) -> Unit) -> Unit,
     onEditVisit: (Long) -> Unit,
     onAddVisit: () -> Unit,
-    onDeleteVisit: (Long) -> Unit,
+    onDeleteVisit: (Long, ((() -> Unit)) -> Unit) -> Unit,
     onEditLibrary: (Long) -> Unit,
     onAddLibrary: () -> Unit,
-    onDeleteLibrary: (Long) -> Unit,
+    onDeleteLibrary: (Long, ((() -> Unit)) -> Unit) -> Unit,
     contentPadding: PaddingValues,
 ) {
     val s = Lang.s
     val pager = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
     val titles = listOf(s.notesTab2, s.visitsTab2, s.libraryTab)
+    val snackbars = remember { SnackbarHostState() }
+    // Удаление записи — обратимо: снекбар «Вернуть» висит, пока пользователь не ушёл с экрана.
+    val undoable: (String, () -> Unit) -> Unit = { message, undo ->
+        scope.launch {
+            snackbars.currentSnackbarData?.dismiss()
+            if (snackbars.showSnackbar(message, actionLabel = s.undo) == SnackbarResult.ActionPerformed) undo()
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(top = contentPadding.calculateTopPadding())) {
@@ -190,12 +204,13 @@ fun RecordsScreen(
             }
             HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
                 when (page) {
-                    0 -> NotesList(notes, onOpenNote, onDeleteNote, contentPadding)
-                    1 -> VisitsList(visits, onEditVisit, onDeleteVisit, contentPadding)
-                    else -> LibraryList(library, onEditLibrary, onDeleteLibrary, contentPadding)
+                    0 -> NotesList(notes, onOpenNote, { id -> onDeleteNote(id) { undoable(s.noteDeleted) { it() } } }, contentPadding)
+                    1 -> VisitsList(visits, onEditVisit, { id -> onDeleteVisit(id) { undoable(s.visitDeleted) { it() } } }, contentPadding)
+                    else -> LibraryList(library, onEditLibrary, { id -> onDeleteLibrary(id) { undoable(s.entryDeleted) { it() } } }, contentPadding)
                 }
             }
         }
+        SnackbarHost(snackbars, Modifier.align(Alignment.BottomCenter).padding(bottom = contentPadding.calculateBottomPadding() + 80.dp))
         ExtendedFloatingActionButton(
             onClick = {
                 when (pager.currentPage) {
@@ -224,6 +239,22 @@ fun ageGroup(atMillis: Long, s: S): String {
         else -> s.groupOlder
     }
 }
+/**
+ * Уход с формы с несохранёнными правками — через вопрос: мастер таблетки так делает, а заметка,
+ * визит и запись каталога теряли набранное от одного касания стрелки «назад».
+ */
+@Composable
+fun DiscardChangesDialog(onDiscard: () -> Unit, onDismiss: () -> Unit) {
+    val s = Lang.s
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(s.discardTitle) },
+        text = { Text(s.discardBody) },
+        confirmButton = { TextButton(onClick = onDiscard) { Text(s.closeNoSave) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(s.cancel) } },
+    )
+}
+
 /** Строка поиска над списком: одинаковая для заметок и каталога. */
 @Composable
 fun SearchField(query: String, onChange: (String) -> Unit) {
@@ -423,9 +454,11 @@ fun VisitsList(
     }
 
     // Мини-календарь: видно, в какие дни есть визиты, и можно отфильтровать список одним тапом.
-    var month by remember { mutableStateOf(LocalDate.now().withDayOfMonth(1)) }
+    // Пока месяц не листали руками, открываем его на ближайшем визите.
+    var month by remember { mutableStateOf<LocalDate?>(null) }
     var pickedDay by remember { mutableStateOf<Long?>(null) }
     val visitDays = remember(visits) { visits.map { epochDayOf(it.atMillis) }.toSet() }
+    val shownMonth = month ?: LocalDate.ofEpochDay(visitStartMonth(visitDays, LocalDate.now().toEpochDay()))
 
     if (visits.isEmpty()) {
         EmptyTabHint(s.visitsEmptyTitle, s.visitsEmptyBody)
@@ -453,10 +486,10 @@ fun VisitsList(
     ) {
         item(key = "calendar") {
             VisitsCalendar(
-                month = month,
+                month = shownMonth,
                 visitDays = visitDays,
                 picked = pickedDay,
-                onMonth = { month = month.plusMonths(it) },
+                onMonth = { month = shownMonth.plusMonths(it) },
                 onPick = { day -> pickedDay = if (pickedDay == day) null else day },
             )
         }
@@ -487,6 +520,16 @@ fun VisitsList(
 }
 
 /** Компактный месяц над списком визитов: точка под числом — в этот день есть визит. */
+/**
+ * Месяц, на котором открывается календарь визитов: ближайший будущий визит, а если таких нет —
+ * последний прошедший. Открываться всегда на текущем месяце неудобно: запись к врачу обычно
+ * на другой месяц, и календарь встречал пустой сеткой.
+ */
+fun visitStartMonth(visitDays: Collection<Long>, todayDay: Long): Long {
+    val day = visitDays.filter { it >= todayDay }.minOrNull() ?: visitDays.maxOrNull() ?: todayDay
+    return LocalDate.ofEpochDay(day).withDayOfMonth(1).toEpochDay()
+}
+
 @Composable
 private fun VisitsCalendar(
     month: LocalDate,
@@ -642,12 +685,14 @@ fun LibraryList(
     val s = Lang.s
     var query by rememberSaveable { mutableStateOf("") }
     val entries = remember(entries, query) {
-        if (query.isBlank()) {
+        // Тот же поиск, что по заметкам: все слова запроса, без учёта регистра и «ё/е».
+        val words = normalizeSearch(query).split(' ').filter { it.isNotBlank() }
+        if (words.isEmpty()) {
             entries
         } else {
-            val q = query.trim().lowercase()
-            entries.filter {
-                it.name.lowercase().contains(q) || it.effect.lowercase().contains(q) || it.feeling.lowercase().contains(q)
+            entries.filter { e ->
+                val hay = normalizeSearch(listOf(e.name, e.effect, e.feeling).joinToString(" "))
+                words.all { it in hay }
             }
         }
     }
@@ -684,7 +729,7 @@ fun LibraryList(
                 Column {
                     // Фото — во всю ширину карточки, чтобы упаковку было видно без открытия.
                     entry.photoUri?.let { uri ->
-                        UriImage(uri = uri, modifier = Modifier.fillMaxWidth().height(180.dp))
+                        UriImage(uri = uri, modifier = Modifier.fillMaxWidth().height(180.dp), contentDescription = Lang.s.photoDesc)
                     }
                     Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
                         MarqueeText(entry.name, fontWeight = FontWeight.SemiBold)
@@ -730,9 +775,15 @@ fun NoteViewScreen(
     var note by remember { mutableStateOf<Note?>(null) }
     // Привязка к таблетке — иначе поле «О какой таблетке» было бы только на запись, без чтения.
     var medName by remember { mutableStateOf<String?>(null) }
+    var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(noteId) {
         note = vm.loadNote(noteId)
         medName = note?.medId?.let { vm.medName(it) }
+        loaded = true
+    }
+    // Заметку могли удалить из списка: пустой экран с рабочими кнопками читается как поломка.
+    if (loaded && note == null) {
+        LaunchedEffect(Unit) { onDone() }
     }
     var confirmDelete by remember { mutableStateOf(false) }
     if (confirmDelete) {
@@ -839,6 +890,17 @@ fun EditNoteScreen(
     }
 
     val canSave = title.isNotBlank() || body.isNotBlank()
+    // Что было при открытии: с этим сравниваем, чтобы не спрашивать зря.
+    var snapshot by remember { mutableStateOf<String?>(null) }
+    val current = listOf(title, description, body, tags, medId?.toString().orEmpty(), date.toString(), time.toString()).joinToString("|")
+    LaunchedEffect(loaded) { if (loaded && snapshot == null) snapshot = current }
+    val dirty = snapshot != null && snapshot != current
+    var confirmDiscard by remember { mutableStateOf(false) }
+    fun requestClose() { if (dirty) confirmDiscard = true else onDone() }
+    if (confirmDiscard) {
+        DiscardChangesDialog(onDiscard = { confirmDiscard = false; onDone() }, onDismiss = { confirmDiscard = false })
+    }
+    BackHandler { requestClose() }
 
     fun save() {
         vm.saveNote(
@@ -876,7 +938,7 @@ fun EditNoteScreen(
             TopAppBar(
                 title = { Text(if (isNew) s.newNote else s.editNote) },
                 navigationIcon = {
-                    IconButton(onClick = onDone) {
+                    IconButton(onClick = { requestClose() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
@@ -1012,16 +1074,21 @@ fun EditVisitScreen(
     val s = Lang.s
     val context = LocalContext.current
     val isNew = visitId == 0L
-    var loaded by remember { mutableStateOf(isNew) }
-    var title by remember { mutableStateOf("") }
-    var place by remember { mutableStateOf("") }
-    var comment by remember { mutableStateOf("") }
-    var remind by remember { mutableStateOf(true) }
-    var date by remember { mutableStateOf(LocalDate.now().plusDays(1)) }
-    var time by remember { mutableStateOf(LocalTime.of(12, 0)) }
+    // rememberSaveable, а не remember: «Изменить сроки» уводит на экран настроек, и по возврату
+    // форма теряла всё набранное. Дата и время — примитивами: Bundle кладёт их без отдельного Saver.
+    var loaded by rememberSaveable { mutableStateOf(isNew) }
+    var title by rememberSaveable { mutableStateOf("") }
+    var place by rememberSaveable { mutableStateOf("") }
+    var comment by rememberSaveable { mutableStateOf("") }
+    var remind by rememberSaveable { mutableStateOf(true) }
+    var dateDay by rememberSaveable { mutableLongStateOf(LocalDate.now().plusDays(1).toEpochDay()) }
+    var timeMinutes by rememberSaveable { mutableIntStateOf(12 * 60) }
+    val date: LocalDate = LocalDate.ofEpochDay(dateDay)
+    val time: LocalTime = LocalTime.of(timeMinutes / 60, timeMinutes % 60)
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
-    val offsets = remember { Settings(context).visitOffsetsMinutes }
+    // Без remember: вернувшись с «Изменить сроки», человек должен увидеть новые смещения.
+    val offsets = Settings(context).visitOffsetsMinutes
 
     LaunchedEffect(visitId) {
         if (!isNew) {
@@ -1031,14 +1098,24 @@ fun EditVisitScreen(
                 comment = v.comment
                 remind = v.remind
                 val dt = v.atMillis.toLocalDateTime()
-                date = dt.toLocalDate()
-                time = dt.toLocalTime()
+                dateDay = dt.toLocalDate().toEpochDay()
+                timeMinutes = dt.toLocalTime().let { it.hour * 60 + it.minute }
             }
             loaded = true
         }
     }
 
     val atMillis = LocalDateTime.of(date, time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    var snapshot by rememberSaveable { mutableStateOf<String?>(null) }
+    val current = listOf(title, place, comment, remind.toString(), date.toString(), time.toString()).joinToString("|")
+    LaunchedEffect(loaded) { if (loaded && snapshot == null) snapshot = current }
+    val dirty = snapshot != null && snapshot != current
+    var confirmDiscard by remember { mutableStateOf(false) }
+    fun requestClose() { if (dirty) confirmDiscard = true else onDone() }
+    if (confirmDiscard) {
+        DiscardChangesDialog(onDiscard = { confirmDiscard = false; onDone() }, onDismiss = { confirmDiscard = false })
+    }
+    BackHandler { requestClose() }
 
     fun save() {
         vm.saveVisit(
@@ -1054,10 +1131,10 @@ fun EditVisitScreen(
     }
 
     if (showDatePicker) {
-        DateWheelDialog(initial = date, onPick = { date = it }, onDismiss = { showDatePicker = false })
+        DateWheelDialog(initial = date, onPick = { dateDay = it.toEpochDay() }, onDismiss = { showDatePicker = false })
     }
     if (showTimePicker) {
-        TimeWheelDialog(initial = time, onPick = { time = it }, onDismiss = { showTimePicker = false })
+        TimeWheelDialog(initial = time, onPick = { timeMinutes = it.hour * 60 + it.minute }, onDismiss = { showTimePicker = false })
     }
 
     Scaffold(
@@ -1065,7 +1142,7 @@ fun EditVisitScreen(
             TopAppBar(
                 title = { Text(if (isNew) s.newVisit else s.editVisit) },
                 navigationIcon = {
-                    IconButton(onClick = onDone) {
+                    IconButton(onClick = { requestClose() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
@@ -1188,6 +1265,7 @@ fun EditVisitScreen(
 
 // ---------- Запись каталога ----------
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditLibraryScreen(
     vm: MainViewModel,
@@ -1208,6 +1286,37 @@ fun EditLibraryScreen(
     var libForm by remember { mutableStateOf("") }
     var libDose by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf<String?>(null) }
+    var snapshot by remember { mutableStateOf<String?>(null) }
+    var confirmDiscard by remember { mutableStateOf(false) }
+
+    val current = listOf(name, effect, feeling, libForm, libDose, photoUri.orEmpty(), startDay?.toString().orEmpty(), endDay?.toString().orEmpty()).joinToString("|")
+    LaunchedEffect(loaded) { if (loaded && snapshot == null) snapshot = current }
+    val dirty = snapshot != null && snapshot != current
+    fun requestClose() { if (dirty) confirmDiscard = true else onDone() }
+    if (confirmDiscard) {
+        DiscardChangesDialog(onDiscard = { confirmDiscard = false; onDone() }, onDismiss = { confirmDiscard = false })
+    }
+    BackHandler { requestClose() }
+
+    // Снимок камерой: файл заводим заранее и отдаём камере — она пишет прямо в него.
+    var pendingPhoto by remember { mutableStateOf<android.net.Uri?>(null) }
+    var cameraMissing by remember { mutableStateOf(false) }
+    var fullscreenPhoto by remember { mutableStateOf<String?>(null) }
+    val cameraLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val target = pendingPhoto
+        pendingPhoto = null
+        if (ok && target != null) photoUri = target.toString()
+    }
+    if (cameraMissing) {
+        AlertDialog(
+            onDismissRequest = { cameraMissing = false },
+            title = { Text(s.cameraMissing) },
+            confirmButton = { TextButton(onClick = { cameraMissing = false }) { Text(s.done) } },
+        )
+    }
+    fullscreenPhoto?.let { FullscreenPhotoDialog(it) { fullscreenPhoto = null } }
 
     val photoLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
@@ -1238,7 +1347,8 @@ fun EditLibraryScreen(
     if (showEndPicker) {
         DateWheelDialog(
             initial = endDay?.let { LocalDate.ofEpochDay(it) } ?: LocalDate.now(),
-            onPick = { picked -> endDay = maxOf(picked.toEpochDay(), startDay ?: picked.toEpochDay()) },
+            // Выбранную дату не подменяем: если она раньше начала, экран покажет ошибку и не даст сохранить.
+            onPick = { picked -> endDay = picked.toEpochDay() },
             onDismiss = { showEndPicker = false },
         )
     }
@@ -1265,7 +1375,7 @@ fun EditLibraryScreen(
             TopAppBar(
                 title = { Text(if (isNew) s.newLibEntry else s.editLibEntry) },
                 navigationIcon = {
-                    IconButton(onClick = onDone) {
+                    IconButton(onClick = { requestClose() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = s.back)
                     }
                 },
@@ -1305,7 +1415,8 @@ fun EditLibraryScreen(
                             ),
                         ) { onDone() }
                     },
-                    enabled = name.isNotBlank(),
+                    // Даты «конец раньше начала» больше не подменяются молча — сохранить с ними нельзя.
+                    enabled = name.isNotBlank() && !(startDay != null && endDay != null && endDay!! < startDay!!),
                     modifier = Modifier.weight(1f).height(48.dp),
                 ) {
                     Text(s.save)
@@ -1402,25 +1513,38 @@ fun EditLibraryScreen(
             )
 
             photoUri?.let { uri ->
+                // Тап по фото — просмотр во весь экран: в рамке 220 dp упаковку не разглядеть.
                 UriImage(
                     uri = uri,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp),
+                        .height(220.dp)
+                        .clickable { fullscreenPhoto = uri },
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(
-                    onClick = { photoLauncher.launch(arrayOf("image/*")) },
-                    modifier = Modifier.weight(1f),
-                ) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = { photoLauncher.launch(arrayOf("image/*")) }) {
                     Text(s.photoPick, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
+                OutlinedButton(
+                    onClick = {
+                        // Камеры может не быть вовсе — тогда честно говорим об этом, а не падаем.
+                        val target = runCatching { newPhotoTarget(context) }.getOrNull()
+                        if (target == null) {
+                            cameraMissing = true
+                        } else {
+                            pendingPhoto = target
+                            if (runCatching { cameraLauncher.launch(target) }.isFailure) {
+                                pendingPhoto = null
+                                cameraMissing = true
+                            }
+                        }
+                    },
+                ) {
+                    Text(s.photoCamera, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                }
                 if (photoUri != null) {
-                    OutlinedButton(
-                        onClick = { photoUri = null },
-                        modifier = Modifier.weight(1f),
-                    ) {
+                    OutlinedButton(onClick = { photoUri = null }) {
                         Text(s.photoRemove, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
@@ -1498,17 +1622,34 @@ fun TimeWheelDialog(
 /** Длинная сторона превью в пикселях: фото с камеры на 12 Мп в списке каталога не нужно. */
 private const val IMAGE_MAX_SIDE_PX = 1280
 
+/** Во весь экран нужна деталь на упаковке, поэтому уменьшаем меньше. */
+private const val FULLSCREEN_MAX_SIDE_PX = 2560
+
+/** Файл для снимка упаковки: своя папка внутри приложения, наружу отдаётся content-ссылка. */
+private fun newPhotoTarget(context: android.content.Context): android.net.Uri {
+    val dir = java.io.File(context.filesDir, "photos").apply { mkdirs() }
+    val file = java.io.File(dir, "pack-" + System.currentTimeMillis() + ".jpg")
+    return androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", file)
+}
+
 /**
  * Превью изображения по SAF-URI; тихо ничего не рисует, если файл недоступен.
  * Картинка уменьшается при декодировании: несколько полноразмерных фото в списке — это OutOfMemory.
  */
 @Composable
-fun UriImage(uri: String, modifier: Modifier = Modifier) {
+fun UriImage(
+    uri: String,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null,
+    /** Во весь экран фото показывается целиком, а не обрезанным по рамке превью. */
+    fit: Boolean = false,
+    maxSidePx: Int = IMAGE_MAX_SIDE_PX,
+) {
     val context = LocalContext.current
-    var bitmap by remember(uri) {
+    var bitmap by remember(uri, maxSidePx) {
         mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
     }
-    LaunchedEffect(uri) {
+    LaunchedEffect(uri, maxSidePx) {
         bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
                 val parsed = android.net.Uri.parse(uri)
@@ -1516,7 +1657,7 @@ fun UriImage(uri: String, modifier: Modifier = Modifier) {
                 val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 context.contentResolver.openInputStream(parsed)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
                 var sample = 1
-                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > IMAGE_MAX_SIDE_PX) sample *= 2
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > maxSidePx) sample *= 2
                 val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
                 context.contentResolver.openInputStream(parsed)?.use {
                     android.graphics.BitmapFactory.decodeStream(it, null, opts)
@@ -1527,9 +1668,44 @@ fun UriImage(uri: String, modifier: Modifier = Modifier) {
     bitmap?.let {
         androidx.compose.foundation.Image(
             bitmap = it,
-            contentDescription = null,
+            // Без подписи незрячий оператор не узнаёт, что у записи вообще есть фото упаковки.
+            contentDescription = contentDescription ?: Lang.s.photoDesc,
             modifier = modifier,
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            contentScale = if (fit) {
+                androidx.compose.ui.layout.ContentScale.Fit
+            } else {
+                androidx.compose.ui.layout.ContentScale.Crop
+            },
         )
+    }
+}
+
+/**
+ * Фото упаковки во весь экран. В форме и в списке оно обрезано рамкой, а разобрать надо
+ * мелкую надпись на коробке — для этого и нужен полный размер.
+ */
+@Composable
+fun FullscreenPhotoDialog(uri: String, onDismiss: () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.94f))
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            UriImage(
+                uri = uri,
+                modifier = Modifier.fillMaxWidth(),
+                fit = true,
+                maxSidePx = FULLSCREEN_MAX_SIDE_PX,
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                Icon(Icons.Default.Close, contentDescription = Lang.s.photoClose, tint = Color.White)
+            }
+        }
     }
 }

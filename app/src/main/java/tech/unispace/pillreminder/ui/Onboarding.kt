@@ -3,6 +3,8 @@
 package tech.unispace.pillreminder.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,7 +80,10 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                 Column(
                     Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 32.dp),
+                        // Прокрутка: при системном крупном шрифте длинный слайд не влезал,
+                        // и низ текста просто обрезался.
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 32.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {

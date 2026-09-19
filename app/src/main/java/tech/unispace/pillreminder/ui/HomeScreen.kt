@@ -5,7 +5,6 @@
 
 package tech.unispace.pillreminder.ui
 
-import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +14,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +60,7 @@ import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -102,6 +104,7 @@ import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.alarm.trackerDisplayName
 import tech.unispace.pillreminder.data.Dose
 import tech.unispace.pillreminder.data.DoseStatus
+import tech.unispace.pillreminder.data.bedtimeDropCount
 import tech.unispace.pillreminder.data.EARLY_TAKE_THRESHOLD_MS
 import tech.unispace.pillreminder.data.MEAL_WAIT_MAX_MS
 import tech.unispace.pillreminder.data.MED_FORMS
@@ -111,6 +114,8 @@ import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.data.TrackerEntry
 import tech.unispace.pillreminder.data.TrackerType
 import tech.unispace.pillreminder.data.byClock
+import tech.unispace.pillreminder.data.courseDaysLeft
+import tech.unispace.pillreminder.data.courseEndDay
 import tech.unispace.pillreminder.data.epochDayOf
 import tech.unispace.pillreminder.data.fixedTimesList
 import tech.unispace.pillreminder.data.today
@@ -129,6 +134,9 @@ fun formIcon(form: String): ImageVector = when (form) {
     "Свечи", "Suppository" -> Icons.Default.Healing
     else -> Icons.Default.MedicalServices
 }
+
+/** Сколько дней до конца курса начинать показывать метку на карточке: «ещё 30 дней» решения не меняет. */
+private const val COURSE_WARN_DAYS = 7
 
 private val GREEN = Color(0xFF4CAF50)
 private val AMBER = Color(0xFFE0A100)
@@ -173,7 +181,13 @@ fun HomeScreen(
     onOpenTutorial: () -> Unit,
     onOpenReport: () -> Unit,
     onBedtime: () -> Unit,
-    onMeal: () -> Unit,
+    /** «Еда»: колбэк получает записанный момент, чтобы снекбар «Вернуть» знал, что убирать. */
+    onMeal: ((Long) -> Unit) -> Unit,
+    /** Название только что сохранённой таблетки; экран показывает снекбар и зовёт [onSavedShown]. */
+    savedMedName: String? = null,
+    onSavedShown: () -> Unit = {},
+    onDeleteMeal: (Long) -> Unit,
+    onUndoBedtime: () -> Unit,
     sleepToRate: TrackerEntry?,
     onRateSleep: (TrackerEntry, Int, Int) -> Unit,
     onDismissSleepRating: () -> Unit,
@@ -191,7 +205,7 @@ fun HomeScreen(
     fun confirmWithUndo(message: String, undo: () -> Unit) {
         scope.launch {
             snackbars.currentSnackbarData?.dismiss()
-            val result = snackbars.showSnackbar(message = message, actionLabel = s.undo, duration = SnackbarDuration.Short)
+            val result = snackbars.showSnackbar(message = message, actionLabel = s.undo, duration = SnackbarDuration.Long)
             if (result == SnackbarResult.ActionPerformed) undo()
         }
     }
@@ -217,7 +231,8 @@ fun HomeScreen(
     var actionTarget by remember { mutableStateOf<MedRow?>(null) }
     actionTarget?.let { row ->
         val next = row.nextDose
-        val due = next != null && !row.med.asNeeded && next.plannedAt <= state.now && !row.waitsMeal
+        val mealTimedOut = next != null && row.waitsMeal && state.now - next.plannedAt >= MEAL_WAIT_MAX_MS
+        val due = next != null && !row.med.asNeeded && next.plannedAt <= state.now && (!row.waitsMeal || mealTimedOut)
         AlertDialog(
             onDismissRequest = { actionTarget = null },
             title = { Text(row.med.name) },
@@ -263,20 +278,25 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(s.reorderBtn, maxLines = 1, softWrap = false) }
                     }
+                    TextButton(
+                        onClick = {
+                            deleteTarget = row
+                            actionTarget = null
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(s.delete, maxLines = 1, softWrap = false) }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     onDuplicate(row.med.id)
+                    confirmWithUndo(s.copyCreated) {}
                     actionTarget = null
                 }) { Text(s.duplicateBtn) }
             },
-            dismissButton = {
-                TextButton(onClick = {
-                    deleteTarget = row
-                    actionTarget = null
-                }) { Text(s.delete) }
-            },
+            // «Отмена» там, где её ждёт палец; удаление — красной строкой в теле диалога.
+            dismissButton = { TextButton(onClick = { actionTarget = null }) { Text(s.cancel) } },
         )
     }
     // Меньше четырёх часов сна — почти всегда ошибка нажатия, поэтому переспрашиваем.
@@ -356,10 +376,39 @@ fun HomeScreen(
     }
     val showTimeline = nodes.size > 1
 
-    // Ждущий еду приём «пора» не считается: кнопка обещает ровно то, что отметит планировщик.
-    val dueCount = state.rows.count { r -> !r.waitsMeal && r.snoozedUntil == null && r.nextDose?.let { it.plannedAt <= state.now } == true }
+    // Число считает планировщик тем же правилом, каким отмечает: по приёмам, а не по карточкам,
+    // и без давно просроченных — иначе кнопка «(1)» молча отмечала два приёма.
+    val dueCount = state.dueNowCount
     val showTakeAll = dueCount >= 2
     val showEmpty = state.rows.isEmpty() && state.loaded
+
+    // Сколько неотмеченных приёмов снимет «Сон»: «по часам» живут по своим временам и не снимаются.
+    val byClockIds = state.rows.filter { it.med.byClock }.map { it.med.id }.toSet()
+    val bedtimeDrop = bedtimeDropCount(state.doses, byClockIds)
+    var confirmBedtime by remember { mutableStateOf(false) }
+    if (confirmBedtime) {
+        AlertDialog(
+            onDismissRequest = { confirmBedtime = false },
+            title = { Text(s.bedtimeConfirmTitle) },
+            text = { Text(if (bedtimeDrop > 0) s.bedtimeConfirmBody(bedtimeDrop) else s.bedtimeConfirmBodyEmpty) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmBedtime = false
+                    onBedtime()
+                    confirmWithUndo(s.bedtimeSaved(formatClock(System.currentTimeMillis()))) { onUndoBedtime() }
+                }) { Text(s.bedtimeConfirmBtn) }
+            },
+            dismissButton = { TextButton(onClick = { confirmBedtime = false }) { Text(s.cancel) } },
+        )
+    }
+
+    // Факт сохранения подтверждается: карточка на главном могла выглядеть так же, как до правки,
+    // и человек не понимал, применилось ли.
+    LaunchedEffect(savedMedName) {
+        val saved = savedMedName ?: return@LaunchedEffect
+        confirmWithUndo(s.savedMed(saved)) {}
+        onSavedShown()
+    }
 
     // Тап по кружку на схеме дня: прокрутить к карточке и подсветить её на пару секунд.
     var highlightMedId by remember { mutableStateOf<Long?>(null) }
@@ -367,7 +416,7 @@ fun HomeScreen(
         val id = highlightMedId ?: return@LaunchedEffect
         val index = state.rows.indexOfFirst { it.med.id == id }
         if (index >= 0) {
-            val before = (if (!deliveryFine) 1 else 0) + 1 + (if (showTimeline) 1 else 0) + (if (showEmpty) 1 else 0) + (if (showTakeAll) 1 else 0)
+            val before = (if (!deliveryFine) 1 else 0) + 1 + (if (showEmpty) 1 else 0) + (if (showTakeAll) 1 else 0)
             listState.animateScrollToItem(before + index)
         }
         delay(HIGHLIGHT_MS)
@@ -404,21 +453,13 @@ fun HomeScreen(
                 }
             }
 
-            item(key = "wake") { WakeCard(state, onRestartDay) }
-
-            // Схема дня — своей карточкой: карточка пробуждения говорит о времени подъёма, схема — о всём дне.
-            if (showTimeline) {
-                item(key = "timeline") {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Timeline, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(s.timelineCardTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            DayTimeline(nodes, state.now, Modifier.fillMaxWidth(), onPillTap = { highlightMedId = it })
-                        }
+            // Карточка дня и схема дня — одна карточка: раньше «Проснулись в 08:00» и первый узел
+            // «Подъём 08:00» шли подряд двумя карточками и съедали пол-экрана до первого действия.
+            item(key = "wake") {
+                WakeCard(state, onRestartDay) {
+                    if (showTimeline) {
+                        Spacer(Modifier.height(10.dp))
+                        DayTimeline(nodes, state.now, Modifier.fillMaxWidth(), onPillTap = { highlightMedId = it })
                     }
                 }
             }
@@ -435,7 +476,7 @@ fun HomeScreen(
                                 if (ids.isNotEmpty()) confirmWithUndo(s.snackTakenAll(ids.size)) { ids.forEach(onUndo) }
                             }
                         },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) {
                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
@@ -473,7 +514,11 @@ fun HomeScreen(
             }
 
             items(trackerRows, key = { "tracker-" + it.tracker.id }) { row ->
-                TrackerReminderCard(row, state.now, onOpenTracker, onQuickEntry)
+                TrackerReminderCard(row, state.now, onOpenTracker) { entry ->
+                    // Подтверждение — снекбаром экрана: внутри карточки его показать нечем.
+                    onQuickEntry(entry)
+                    confirmWithUndo(s.savedShort) {}
+                }
             }
 
             // Редкие действия — в самом низу, под таблетками и трекерами: они не про сегодняшний день.
@@ -518,10 +563,9 @@ fun HomeScreen(
                 } else {
                     val bedtimeAt = remember(minuteKey) { settings.pendingSleepStart }
                     FilledTonalButton(
-                        onClick = {
-                            onBedtime()
-                            Toast.makeText(context, s.bedtimeSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
-                        },
+                        // «Сон» закрывает день, а это необратимо — спрашиваем всегда и говорим, сколько
+                        // приёмов будет снято. Вернуться можно снекбаром сразу после.
+                        onClick = { confirmBedtime = true },
                         shape = RoundedCornerShape(16.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp),
                         modifier = Modifier.weight(1f).height(56.dp),
@@ -539,8 +583,9 @@ fun HomeScreen(
                     // «Еда» рядом: обе кнопки относятся к текущему дню.
                     FilledTonalButton(
                         onClick = {
-                            onMeal()
-                            Toast.makeText(context, s.mealSaved(formatClock(System.currentTimeMillis())), Toast.LENGTH_SHORT).show()
+                            // Ошибочная «Еда» открывает приёмы «после еды» и двигает их план, поэтому
+                            // подтверждаем снекбаром с «Вернуть», а не системным всплывающим сообщением.
+                            onMeal { at -> confirmWithUndo(s.mealSaved(formatClock(at))) { onDeleteMeal(at) } }
                         },
                         shape = RoundedCornerShape(16.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp),
@@ -605,7 +650,7 @@ private fun ReorderDialog(meds: List<Medication>, onDone: (List<Long>) -> Unit, 
 }
 
 @Composable
-private fun WakeCard(state: HomeState, onRestartDay: () -> Unit) {
+private fun WakeCard(state: HomeState, onRestartDay: () -> Unit, extra: @Composable ColumnScope.() -> Unit = {}) {
     val s = Lang.s
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -660,7 +705,18 @@ private fun WakeCard(state: HomeState, onRestartDay: () -> Unit) {
                         }
                         else -> {
                             Text(s.wokeAt(formatClock(state.wokeUpAt)), fontWeight = FontWeight.SemiBold)
-                            Text(s.dayPlanned, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            // Подзаголовок отвечает на главный вопрос экрана: сколько пора сейчас и когда следующий,
+                            // вместо бесполезного «День уже размечен».
+                            val nextAt = state.rows.mapNotNull { it.nextDose }.filter { it.plannedAt > state.now }.minByOrNull { it.plannedAt }
+                            Text(
+                                when {
+                                    state.dueNowCount > 0 -> s.dueNowLine(state.dueNowCount)
+                                    nextAt != null -> s.nextIntakeLine(formatClock(nextAt.plannedAt))
+                                    else -> s.allDoneForToday
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -673,6 +729,8 @@ private fun WakeCard(state: HomeState, onRestartDay: () -> Unit) {
                     Text(s.newDayBtn, maxLines = 1, softWrap = false)
                 }
             }
+            // Схема дня рисуется здесь же, внутри карточки дня.
+            extra()
         }
     }
 }
@@ -726,7 +784,7 @@ private fun HomeActionButton(
 ) {
     TextButton(
         onClick = onClick,
-        modifier = modifier.height(40.dp),
+        modifier = modifier.heightIn(min = 48.dp),
         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
     ) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp))
@@ -751,13 +809,12 @@ const val QUICK_ENTRY_COOLDOWN_MS = 5 * 60_000L
 @Composable
 private fun QuickTrackerEntry(row: TrackerRow, onQuickEntry: (TrackerEntry) -> Unit) {
     val s = Lang.s
-    val context = LocalContext.current
     when (row.tracker.type) {
         TrackerType.MOOD -> {
             Text(s.quickMoodTitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             EmojiRating(0) { value ->
+                // Подтверждение показывает экран: снекбар живёт на уровне списка, а не внутри карточки.
                 onQuickEntry(TrackerEntry(trackerId = row.tracker.id, atMillis = System.currentTimeMillis(), value = value.toDouble()))
-                Toast.makeText(context, s.savedShort, Toast.LENGTH_SHORT).show()
             }
         }
         TrackerType.WEIGHT -> {
@@ -783,7 +840,6 @@ private fun QuickTrackerEntry(row: TrackerRow, onQuickEntry: (TrackerEntry) -> U
                                 value = (Math.round(value * 10.0) / 10.0),
                             ),
                         )
-                        Toast.makeText(context, s.savedShort, Toast.LENGTH_SHORT).show()
                     },
                     contentPadding = PaddingValues(horizontal = 16.dp),
                 ) { Text(s.save, maxLines = 1, softWrap = false) }
@@ -931,23 +987,41 @@ private fun MedCard(
         add(s.amountFact(row.med.dosesPerIntake, row.med.form, row.med.doseInfo))
         // Связь с едой — такие же факты, как дозировка; каждое правило своей меткой.
         s.mealRelationParts(row.med.afterMealMinutes, row.med.beforeMealMinutes, row.med.mealCalories).forEach { add(it) }
-        if (row.med.byClock) {
-            add(s.byClockShort + " " + row.med.fixedTimesList().joinToString(", ") { "%02d:%02d".format(it / 60, it % 60) })
-        }
-        row.med.stockCount?.let { stock ->
-            val shown = stock.coerceAtLeast(0.0)
-            add(s.stockLeft(if (shown % 1.0 == 0.0) shown.toInt().toString() else shown.toString()))
-            // Прогноз «на сколько хватит» полезнее голого остатка.
-            stockRunsOut(row.med)?.let { day -> add(s.stockUntil(shortDayText(day))) }
-        }
+        // Дальше — только то, что меняет решение «что сделать сейчас». Остальное (полное расписание,
+        // точный остаток, прогноз) человек смотрит в карточке таблетки, а не на главном экране каждый день.
         if (!compact) {
-            add(
-                when {
-                    row.med.asNeeded -> s.asNeededShort
-                    row.linkedParentName != null -> s.afterMed(row.linkedParentName, s.duration(row.med.linkedDelayMinutes))
-                    else -> s.schedule(row.med.timesPerDay, row.med.intervalMinutes, row.med.everyNDays, row.med.weekdaysList())
-                },
-            )
+            if (row.med.byClock) {
+                // Длинный список времён не режем многоточием: лишние прячем за «и ещё N».
+                val times = row.med.fixedTimesList().map { "%02d:%02d".format(it / 60, it % 60) }
+                val shownTimes = times.take(3)
+                add(
+                    s.byClockShort + " " + shownTimes.joinToString(", ") +
+                        if (times.size > shownTimes.size) " " + s.andMore(times.size - shownTimes.size) else "",
+                )
+            } else {
+                add(
+                    when {
+                        row.med.asNeeded -> s.asNeededShort
+                        row.linkedParentName != null -> s.afterMed(row.linkedParentName, s.duration(row.med.linkedDelayMinutes))
+                        else -> s.schedule(row.med.timesPerDay, row.med.intervalMinutes, row.med.everyNDays, row.med.weekdaysList())
+                    },
+                )
+            }
+            // Курс показываем на финише: «ещё 30 дней» решения не меняет, «последний день» — меняет.
+            courseDaysLeft(row.med, today())?.takeIf { it in 1..COURSE_WARN_DAYS }?.let { add(s.courseLeft(it)) }
+            // Остаток — одной меткой с единицей измерения; прогноз не заходит за конец курса.
+            row.med.stockCount?.let { stock ->
+                val shown = stock.coerceAtLeast(0.0)
+                val until = stockRunsOut(row.med)
+                val courseEnd = courseEndDay(row.med.cycleStartEpochDay, row.med.durationDays)
+                add(
+                    when {
+                        until == null -> s.stockLeft(s.pills(shown, row.med.form))
+                        courseEnd != null && until >= courseEnd -> s.stockEnough(s.pills(shown, row.med.form))
+                        else -> s.stockLeft(s.pills(shown, row.med.form)) + " · " + s.stockUntil(shortDayText(until))
+                    },
+                )
+            }
         }
     }
     val showDots = row.setStatuses.isNotEmpty() && row.dueToday && awake && hasPlan
@@ -955,7 +1029,9 @@ private fun MedCard(
     Card(
         cardModifier
             .fillMaxWidth()
-            .combinedClickable(onClick = { onEdit(row.med.id) }, onLongClick = { onLongPress(row) }),
+            // Тап по карточке ничего не открывает: мастер вызывается карандашом и меню долгого нажатия,
+            // иначе промах мимо «Выпито» уводил в редактирование расписания.
+            .combinedClickable(onClick = {}, onLongClick = { onLongPress(row) }),
         border = border,
         colors = CardDefaults.cardColors(
             containerColor = when {
@@ -994,7 +1070,9 @@ private fun MedCard(
                 !row.dueToday -> s.notTodayShort
                 !awake -> s.waitingWakeShort
                 next == null && row.takenToday == 0 && row.skippedToday == 0 && row.linkedParentName != null -> s.waitsForShort(row.linkedParentName)
-                next == null && (row.takenToday > 0 || row.skippedToday > 0) -> s.allDoneShort
+                // Пропуск в наборе виден словами, а не только янтарной рамкой с контрастом 2,3:1.
+                next == null && row.skippedToday > 0 -> s.setClosedPartialShort(row.takenToday, row.totalToday)
+                next == null && row.takenToday > 0 -> s.allDoneShort
                 else -> null
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1015,7 +1093,7 @@ private fun MedCard(
                             fontWeight = FontWeight.Bold,
                             color = timeColor,
                         )
-                        Text(subText, style = MaterialTheme.typography.labelSmall, color = subColor, maxLines = 1, softWrap = false)
+                        Text(subText, style = MaterialTheme.typography.labelSmall, color = subColor, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 } else if (compact && compactStatus != null) {
                     Text(
@@ -1056,6 +1134,7 @@ private fun MedCard(
                         color = subColor,
                         maxLines = 1,
                         softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(bottom = 4.dp),
                     )
                 }
@@ -1091,6 +1170,22 @@ private fun MedCard(
 
             Spacer(Modifier.height(10.dp))
 
+            // Просроченные больше двух часов приёмы — отдельной строкой: карточка говорит про ближайший,
+            // а забытый утренний приём можно разобрать здесь, не уходя в журнал.
+            row.missed.firstOrNull()?.let { late ->
+                Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        s.missedIntakes(row.missed.size, formatClock(late.plannedAt)),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onSkip(late.id) }) { Text(s.skip, maxLines = 1, softWrap = false) }
+                    TextButton(onClick = { onTake(late.id) }) { Text(s.took, maxLines = 1, softWrap = false) }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+
             Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
                 if (showDots) {
                     SetDots(row.setStatuses, row.nextIndexInSet)
@@ -1102,7 +1197,7 @@ private fun MedCard(
                             StatusLine(s.takenTodayCount(row.takenToday))
                             Spacer(Modifier.height(8.dp))
                         }
-                        Button(onClick = { onTakeNow(row.med.id) }, modifier = Modifier.fillMaxWidth().height(46.dp)) {
+                        Button(onClick = { onTakeNow(row.med.id) }, modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp)) {
                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(s.takeNow, maxLines = 1, softWrap = false)
@@ -1115,11 +1210,12 @@ private fun MedCard(
                     next == null && row.takenToday < row.totalToday -> StatusLine(s.setClosedPartial(row.takenToday, row.totalToday))
                     next == null -> StatusLine(s.allDone(row.takenToday, row.totalToday))
                     else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { onSkip(next.id) }, modifier = Modifier.weight(1f).height(44.dp)) {
+                        OutlinedButton(onClick = { onSkip(next.id) }, modifier = Modifier.weight(1f).heightIn(min = 44.dp)) {
                             Text(s.skip, maxLines = 1, softWrap = false)
                         }
                         // «Отложить» — когда время наступило: за рулём, в душе, ещё не поели.
-                        if (next.plannedAt <= now && !row.waitsMeal) {
+                        // Ожидание еды истекло — приём уже звонит, и «Отложить» нужна именно здесь.
+                        if (next.plannedAt <= now && (!row.waitsMeal || mealTimedOut)) {
                             var menu by remember { mutableStateOf(false) }
                             Box {
                                 OutlinedIconButton(onClick = { menu = true }, modifier = Modifier.size(44.dp)) {
@@ -1138,7 +1234,7 @@ private fun MedCard(
                                 }
                             }
                         }
-                        Button(onClick = { takeChecked(next) }, modifier = Modifier.weight(1f).height(44.dp)) {
+                        Button(onClick = { takeChecked(next) }, modifier = Modifier.weight(1f).heightIn(min = 44.dp)) {
                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(s.took, maxLines = 1, softWrap = false)

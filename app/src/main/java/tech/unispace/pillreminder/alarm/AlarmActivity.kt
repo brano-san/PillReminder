@@ -1,5 +1,6 @@
 package tech.unispace.pillreminder.alarm
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -41,6 +42,16 @@ import tech.unispace.pillreminder.ui.theme.PillTheme
 @OptIn(ExperimentalLayoutApi::class)
 class AlarmActivity : ComponentActivity() {
 
+    /**
+     * Активность `singleTop`: второй приём приходит сюда же. Без этого экран показывал бы первую
+     * таблетку, а большая кнопка «Выпито» отмечала бы её, а не ту, о которой звонит будильник.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        recreate()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
@@ -50,6 +61,7 @@ class AlarmActivity : ComponentActivity() {
         // Группа «3 таблетки»: большие кнопки отмечают все приёмы, а не только старший.
         val ids = intent.getLongArrayExtra(ActionReceiver.EXTRA_DOSE_IDS)?.toList()?.takeIf { it.isNotEmpty() } ?: listOf(doseId)
         val attempt = intent.getIntExtra(EXTRA_ATTEMPT, 0)
+        val plannedAt = intent.getLongExtra(EXTRA_PLANNED_AT, 0L)
         val title = intent.getStringExtra(EXTRA_TITLE) ?: Lang.s.timeToTakeFallback
         val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
         // Варианты «Отложить» настраиваются в «Повторах».
@@ -59,6 +71,7 @@ class AlarmActivity : ComponentActivity() {
         val settings = Settings(this)
         val now = System.currentTimeMillis()
         val nextRepeat = now + settings.repeatIntervalMinutes * 60_000L
+        val plannedText = if (plannedAt > 0) Lang.s.plannedAtShort(formatClock(plannedAt)) else ""
         val closeText = when {
             !settings.repeatEnabled || attempt + 1 >= settings.repeatCount -> Lang.s.fsCloseNoRepeat
             isQuiet(settings, nextRepeat) -> Lang.s.fsCloseAt(formatClock(quietEndMillis(settings, nextRepeat)))
@@ -87,7 +100,9 @@ class AlarmActivity : ComponentActivity() {
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
-                            formatClock(System.currentTimeMillis()),
+                            // Плановое время приёма, а не момент срабатывания: часы на экране не тикают,
+                            // и через двадцать минут человек читал бы старое время как текущее.
+                            plannedText.ifBlank { formatClock(System.currentTimeMillis()) },
                             style = MaterialTheme.typography.displayMedium,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -113,8 +128,17 @@ class AlarmActivity : ComponentActivity() {
                         ) {
                             Text(if (ids.size > 1) Lang.s.takeAllAction else Lang.s.took, style = MaterialTheme.typography.titleLarge, maxLines = 1, softWrap = false)
                         }
-                        Spacer(Modifier.height(12.dp))
-                        Column(
+                        Spacer(Modifier.height(16.dp))
+                        // Три одинаковые широкие кнопки «Отложить на …» занимали пол-экрана и
+                        // спорили с «Выпито». Теперь это подпись и ряд коротких вариантов.
+                        Text(
+                            Lang.s.snoozeRowLabel,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -123,13 +147,15 @@ class AlarmActivity : ComponentActivity() {
                                     onClick = {
                                         lifecycleScope.launch {
                                             // Момент «отложить» живёт в приёме — пересборка будильников его уважает.
-                                            if (doseId >= 0) container.planner.snooze(doseId, minutes)
+                                            // Вся группа, как и «Выпито» рядом: иначе через три минуты
+                                            // звонили остальные приёмы той же группы.
+                                            container.planner.snoozeAll(ids.filter { it >= 0 }, minutes)
                                             finish()
                                         }
                                     },
-                                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                                    modifier = Modifier.weight(1f).height(52.dp),
                                 ) {
-                                    Text(Lang.s.snoozeFor(Lang.s.duration(minutes)), maxLines = 1, softWrap = false)
+                                    Text(Lang.s.duration(minutes), maxLines = 1, softWrap = false)
                                 }
                             }
                         }
@@ -160,5 +186,6 @@ class AlarmActivity : ComponentActivity() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_TEXT = "text"
         const val EXTRA_ATTEMPT = "attempt"
+        const val EXTRA_PLANNED_AT = "plannedAt"
     }
 }

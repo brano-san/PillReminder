@@ -100,6 +100,38 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         at
     }
 
+    /** Отложить всю группу одним действием: в шторке кнопка одна на всё уведомление. */
+    suspend fun snoozeAll(ids: List<Long>, minutes: Int, now: Long = System.currentTimeMillis()) = lock.withLock {
+        val at = now + minutes * MINUTE_MS
+        val scheduler = AlarmScheduler(context)
+        for (id in ids) {
+            val dose = doses.getById(id) ?: continue
+            if (dose.status != DoseStatus.PENDING) continue
+            doses.update(dose.copy(remindAt = at, attempt = 0))
+            scheduler.schedule(dose, at)
+            Notifications.dismiss(context, id)
+        }
+    }
+
+    /**
+     * Отметить всю группу одним проходом. Поштучные `markTaken` пересобирали расписание на каждый
+     * приём, а у ресивера на всё про всё около десяти секунд.
+     */
+    suspend fun markAll(ids: List<Long>, taken: Boolean, now: Long = System.currentTimeMillis()) = lock.withLock {
+        for (id in ids) {
+            if (taken) markTakenLocked(id, now, reschedule = false) else markSkippedLocked(id, now, reschedule = false)
+        }
+        rescheduleAlarmsLocked()
+    }
+
+    /**
+     * Снять будильники всех существующих приёмов. Нужно перед восстановлением из бэкапа:
+     * база очищается, id выдаются заново, и старый будильник разбудил бы телефон о чужом приёме.
+     */
+    suspend fun cancelAllDoseAlarms() = lock.withLock {
+        AlarmScheduler(context).cancelAll(doses.getAll().map { it.id })
+    }
+
     /** Пересобрать ожидающие приёмы одной таблетки — после добавления или редактирования. */
     suspend fun refreshMedToday(medId: Long) = lock.withLock { refreshMedTodayLocked(medId) }
 
@@ -108,15 +140,26 @@ class Planner(private val context: Context, private val db: AppDatabase) {
 
     /** «Пропустил». Следующий приём отсчитывается от планового времени пропущенного. */
     suspend fun markSkipped(doseId: Long, now: Long = System.currentTimeMillis()) = lock.withLock {
-        val dose = doses.getById(doseId) ?: return@withLock
-        if (dose.status != DoseStatus.PENDING) return@withLock
-        doses.update(dose.copy(status = DoseStatus.SKIPPED, takenAt = now, remindAt = null))
+        markSkippedLocked(doseId, now)
+    }
+
+    private suspend fun markSkippedLocked(doseId: Long, now: Long, reschedule: Boolean = true) {
+        val dose = doses.getById(doseId) ?: return
+        if (dose.status == DoseStatus.SKIPPED) return
+        // Выпитый приём можно переотметить пропуском из журнала — тогда возвращаем остаток.
+        if (dose.status == DoseStatus.TAKEN) restoreStock(dose)
+        val day = cycleDay(now)
+        val at = markMoment(dose, now, day)
+        val live = affectsSchedule(dose, day)
+        doses.update(dose.copy(status = DoseStatus.SKIPPED, takenAt = at, remindAt = null))
         Notifications.dismiss(context, dose.id)
-        shiftFollowing(dose, from = maxOf(dose.plannedAt, now))
-        // Связанные таблетки — свои лекарства, привязанные лишь по времени: пропуск родителя их не отменяет.
-        if (isSetStart(dose)) planLinkedChildren(dose, maxOf(dose.plannedAt, now))
-        rescheduleAlarmsLocked()
-        notifyDayDoneIfNeeded(dose.dayEpochDay)
+        if (live) {
+            shiftFollowing(dose, from = maxOf(dose.plannedAt, at))
+            // Связанные таблетки — свои лекарства, привязанные лишь по времени: пропуск родителя их не отменяет.
+            if (isSetStart(dose)) planLinkedChildren(dose, maxOf(dose.plannedAt, at))
+        }
+        if (reschedule) rescheduleAlarmsLocked()
+        if (live) notifyDayDoneIfNeeded(dose.dayEpochDay)
     }
 
     /**
@@ -179,6 +222,13 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         rescheduleAlarmsLocked()
     }
 
+    /** Отмена «Сон»: день снова идёт, приёмы возвращаются. Ошибочное касание не должно стоить дня. */
+    suspend fun undoBedtime() = lock.withLock {
+        val cycle = wakes.latest() ?: return@withLock
+        wakes.upsert(cycle.copy(bedAt = null))
+        rescheduleAlarmsLocked()
+    }
+
     /** «Я поел»: фиксируем время и подвигаем приёмы, которые нельзя пить сразу после еды. */
     suspend fun recordMeal(now: Long = System.currentTimeMillis()) = lock.withLock {
         // Историю еды не чистим: она видна в журнале, на схеме дня и уходит в бэкап.
@@ -196,6 +246,24 @@ class Planner(private val context: Context, private val db: AppDatabase) {
     }
 
     /** Завершить курс вручную (или удалить таблетку с главной): снять с планирования. */
+    /**
+     * Вернуть таблетку из архива в расписание. Курс считаем заново от сегодня: у истёкшего курса
+     * иначе тут же сработало бы автоархивирование, и кнопка выглядела бы сломанной.
+     */
+    suspend fun restoreFromArchive(medId: Long) = lock.withLock {
+        val med = meds.getById(medId) ?: return@withLock
+        meds.update(med.copy(active = true, cycleStartEpochDay = today()))
+        refreshMedTodayLocked(medId)
+    }
+
+    /** Убрать таблетку из архива насовсем. История приёмов остаётся: в ней свой снимок названия. */
+    suspend fun purgeFromArchive(medId: Long) = lock.withLock {
+        val med = meds.getById(medId) ?: return@withLock
+        deactivateLocked(med, reschedule = false)
+        meds.deleteById(medId)
+        rescheduleAlarmsLocked()
+    }
+
     suspend fun finishCourse(medId: Long) = lock.withLock {
         val med = meds.getById(medId) ?: return@withLock
         deactivateLocked(med)
@@ -229,8 +297,8 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         val wakeAt = wakes.getDay(day)?.wakeAt
         val due = all.filter { dose ->
             val med = medsById[dose.medId]
-            dose.status == DoseStatus.PENDING && dose.plannedAt <= now &&
-                med != null && med.active && mealSatisfied(med, dose, all, meals, wakeAt)
+            // Тот же предикат, что считает число на кнопке: отложенные и давно просроченные не трогаем.
+            isTakeAllCandidate(dose, now) && med != null && med.active && mealSatisfied(med, dose, all, meals, wakeAt)
         }
         due.forEach { markTakenLocked(it.id, now) }
         due.map { it.id }
@@ -270,7 +338,12 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         wakes.upsert(WakeEvent(dayEpochDay = day, wakeAt = now))
         // Новый день — про «всё выпито» можно будет сказать снова.
         Settings(context).dayDoneNotifiedFor = -1L
-        dropPending(doses.pendingOnDay(day))
+        // Старые отметки «Еда» подрезаем раз в день: их читают на каждой пересборке и в каждом уведомлении.
+        mealDao.deleteOlderThan(mealPruneBefore(now))
+        // Приёмы «по часам» стоят на своих временах и не зависят от подъёма: снеся их, мы бы стёрли
+        // «Отложить» и уже исчерпанную цепочку повторов, и она началась бы заново.
+        val fixedIds = meds.getActive().filter { it.byClock }.map { it.id }.toSet()
+        dropPending(doses.pendingOnDay(day).filter { it.medId !in fixedIds })
 
         // Дети без родителя (удалён или курс завершён) становятся обычными таблетками «от подъёма».
         for (child in meds.getActive().filter { it.linkedToMedId != null }) {
@@ -288,7 +361,7 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         for (med in active) {
             // Курс закончился — таблетка сама уходит в неактивные.
             if (med.isExpiredOn(day)) {
-                deactivateLocked(med)
+                archiveExpiredLocked(med)
                 continue
             }
             // Связанные планируются от приёма родителя, «по часам» не зависят от пробуждения.
@@ -329,22 +402,22 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         return now
     }
 
-    private suspend fun refreshMedTodayLocked(medId: Long) {
+    private suspend fun refreshMedTodayLocked(medId: Long, reschedule: Boolean = true) {
         // День плавающий: цикл мог начаться вчера вечером; «по часам» живут по календарю.
         val day = cycleDay()
         val med = meds.getById(medId) ?: return
         dropPending(doses.pendingForMedOnDays(medId, (listOf(day, day + 1) + fixedDays()).distinct()))
         if (!med.active || med.byClock) {
             // Расписание по часам дособерёт syncFixedSchedule внутри пересборки.
-            rescheduleAlarmsLocked()
+            if (reschedule) rescheduleAlarmsLocked()
             return
         }
         val wake = currentCycle() ?: run {
-            rescheduleAlarmsLocked()
+            if (reschedule) rescheduleAlarmsLocked()
             return
         }
         if (med.asNeeded || med.isExpiredOn(day) || !isDueOn(med, day) || med.timesPerDay <= 0) {
-            rescheduleAlarmsLocked()
+            if (reschedule) rescheduleAlarmsLocked()
             return
         }
         if (med.linkedToMedId != null) {
@@ -356,7 +429,7 @@ class Planner(private val context: Context, private val db: AppDatabase) {
                 .filter { (it.takenAt ?: it.plannedAt) >= wake.wakeAt }
                 .maxByOrNull { it.indexInDay }
             if (anchor != null) planLinkedChildren(anchor, anchor.takenAt ?: anchor.plannedAt)
-            rescheduleAlarmsLocked()
+            if (reschedule) rescheduleAlarmsLocked()
             return
         }
         val mine = doses.getDay(day).filter { it.medId == medId }
@@ -368,7 +441,7 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         // Набор уже закрыт в этом цикле — новый не открываем: иначе правка комментария рожала бы
         // фантомные просроченные приёмы «от подъёма».
         if (alreadyTaken > 0 && takenInSet == 0 && lastDoneAt >= wake.wakeAt) {
-            rescheduleAlarmsLocked()
+            if (reschedule) rescheduleAlarmsLocked()
             return
         }
         val count = med.timesPerDay - takenInSet
@@ -388,22 +461,29 @@ class Planner(private val context: Context, private val db: AppDatabase) {
                 )
             },
         )
-        rescheduleAlarmsLocked()
+        if (reschedule) rescheduleAlarmsLocked()
     }
 
-    private suspend fun markTakenLocked(doseId: Long, now: Long) {
+    private suspend fun markTakenLocked(doseId: Long, now: Long, reschedule: Boolean = true) {
         val dose = doses.getById(doseId) ?: return
         if (dose.status == DoseStatus.TAKEN) return
-        doses.update(dose.copy(status = DoseStatus.TAKEN, takenAt = now, remindAt = null))
+        val day = cycleDay(now)
+        // Правка истории: время берём плановое, расписание и связанные таблетки не трогаем.
+        val at = markMoment(dose, now, day)
+        val live = affectsSchedule(dose, day)
+        // Пропуск переотмечают как приём: остаток тогда списывается один раз, поэтому статус смотрим до записи.
+        doses.update(dose.copy(status = DoseStatus.TAKEN, takenAt = at, remindAt = null))
         // Уведомление о нём больше не актуально, откуда бы ни пришла отметка.
         Notifications.dismiss(context, dose.id)
-        shiftFollowing(dose, from = now)
-        // Родитель запускает связанные таблетки на КАЖДОМ первом приёме своего набора,
-        // иначе во втором цикле тех же суток они не появятся.
-        if (isSetStart(dose)) planLinkedChildren(dose, now)
+        if (live) {
+            shiftFollowing(dose, from = at)
+            // Родитель запускает связанные таблетки на КАЖДОМ первом приёме своего набора,
+            // иначе во втором цикле тех же суток они не появятся.
+            if (isSetStart(dose)) planLinkedChildren(dose, at)
+        }
         decrementStock(dose.medId, dose.amount)
-        rescheduleAlarmsLocked()
-        notifyDayDoneIfNeeded(dose.dayEpochDay)
+        if (reschedule) rescheduleAlarmsLocked()
+        if (live) notifyDayDoneIfNeeded(dose.dayEpochDay)
     }
 
     /** Приём открывает набор родителя: от него отсчитываются связанные таблетки. */
@@ -425,7 +505,8 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         for (child in meds.childrenOf(parentDose.medId)) {
             if (child.asNeeded || !isDueOn(child, day) || child.timesPerDay <= 0) continue
             if (child.isExpiredOn(day)) {
-                meds.deactivate(child.id)
+                // Через общий путь: связанные дети тоже отвязываются, и человек узнаёт о конце курса.
+                archiveExpiredLocked(child)
                 continue
             }
             val mine = todays.filter { it.medId == child.id }
@@ -493,13 +574,22 @@ class Planner(private val context: Context, private val db: AppDatabase) {
      * Снять таблетку с планирования: деактивировать, убрать её ожидающие приёмы (с будильниками)
      * и отвязать детей — они становятся обычными таблетками «от подъёма» и планируются сразу.
      */
-    private suspend fun deactivateLocked(med: Medication) {
+    /**
+     * Курс закончился: убираем таблетку в архив и говорим об этом. Ручное удаление и «завершить курс»
+     * идут через `deactivateLocked` без уведомления — там человек и так знает, что сделал.
+     */
+    private suspend fun archiveExpiredLocked(med: Medication, reschedule: Boolean = true) {
+        deactivateLocked(med, reschedule)
+        Notifications.showCourseDone(context, med.id, med.name)
+    }
+
+    private suspend fun deactivateLocked(med: Medication, reschedule: Boolean = true) {
         meds.deactivate(med.id)
         val day = cycleDay()
         dropPending(doses.pendingForMedOnDays(med.id, (listOf(day, day + 1) + fixedDays()).distinct()))
         for (child in meds.childrenOf(med.id)) {
             meds.update(child.copy(linkedToMedId = null))
-            refreshMedTodayLocked(child.id)
+            refreshMedTodayLocked(child.id, reschedule)
         }
     }
 
@@ -570,7 +660,7 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         val list = doses.getDay(day).filter { it.medId !in asNeeded }
         if (list.isEmpty() || list.any { it.status == DoseStatus.PENDING }) return
         settings.dayDoneNotifiedFor = day
-        Notifications.showDayDone(context)
+        if (settings.notifyDayDone) Notifications.showDayDone(context)
     }
 
     /**
@@ -584,14 +674,11 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         for (day in days) {
             val existing = doses.getDay(day)
             val planned = mutableListOf<Dose>()
-            val dayStart = LocalDate.ofEpochDay(day)
-                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val date = LocalDate.ofEpochDay(day)
             for (med in fixed) {
-                if (med.isExpiredOn(day)) {
-                    meds.deactivate(med.id)
-                    continue
-                }
-                if (!isDueOn(med, day)) continue
+                // Курс и частота — одним правилом; архив здесь не трогаем: курс, кончающийся сегодня,
+                // обязан отдать сегодняшние приёмы, а «завтра его уже нет» их раньше удаляло.
+                if (!planFixedOn(med, day)) continue
                 val mine = existing.filter { it.medId == med.id }
                 med.fixedTimesList().forEachIndexed { k, minutes ->
                     if (mine.none { it.indexInDay == k }) {
@@ -599,8 +686,10 @@ class Planner(private val context: Context, private val db: AppDatabase) {
                             medId = med.id,
                             dayEpochDay = day,
                             indexInDay = k,
-                            plannedAt = dayStart + minutes * MINUTE_MS,
-                            baseAt = dayStart + minutes * MINUTE_MS,
+                            // Время дня, а не «полночь + N миллисекунд»: в день перевода стрелок
+                            // 08:00 обязано остаться 08:00.
+                            plannedAt = fixedTimeMillis(date, minutes),
+                            baseAt = fixedTimeMillis(date, minutes),
                             amount = med.dosesPerIntake,
                             medNameSnapshot = med.name,
                         )
@@ -620,6 +709,8 @@ class Planner(private val context: Context, private val db: AppDatabase) {
         // день последнего пробуждения нужен, чтобы снять и его устаревшие будильники.
         val day = cycleDay(now)
         val days = (listOf(day, calendarDay, calendarDay + 1) + listOfNotNull(wakes.latest()?.dayEpochDay)).distinct()
+        // Истёкшие курсы — в архив один раз и по сегодняшнему дню; без пересборки внутри пересборки.
+        for (med in meds.getActive().filter { courseOver(it, calendarDay) }) archiveExpiredLocked(med, reschedule = false)
         // Сначала дособираем расписание «по часам», потом уже ставим будильники.
         syncFixedSchedule(fixedDays())
         applyIntakeConstraints(day)
@@ -646,21 +737,19 @@ class Planner(private val context: Context, private val db: AppDatabase) {
             // План ушёл в будущее («Еда» подвинула приём) — старое уведомление в шторке больше не правда.
             // Напоминание о еде у приёма с наступившим временем при этом остаётся висеть.
             if (dose.plannedAt > now) Notifications.dismiss(context, dose.id)
-            val remindAt = dose.remindAt
-            val at = when {
-                due > now -> due
-                // «Отложить» или цепочка повторов уже назначили момент — уважаем его.
-                remindAt != null && remindAt > now -> remindAt
-                // Цепочка повторов исчерпана — не начинаем заново при каждой пересборке.
-                dose.attempt > 0 && (!settings.repeatEnabled || dose.attempt >= settings.repeatCount) -> continue
-                // Приём просрочен давно (телефон был выключен) — молчим, чтобы не звонить
-                // среди дня о пропущенном утреннем приёме; он остаётся в списке дня.
-                now - due > OVERDUE_GRACE_MS -> continue
-                // Приём просрочен (перезагрузка, смена времени) — не звоним сразу,
-                // а подхватываем цепочку повторов через обычный интервал.
-                settings.repeatEnabled -> now + settings.repeatIntervalMinutes * MINUTE_MS
-                else -> continue
-            }
+            val plan = alarmPlan(
+                due = due,
+                now = now,
+                remindAt = dose.remindAt,
+                attempt = dose.attempt,
+                repeatEnabled = settings.repeatEnabled,
+                repeatCount = settings.repeatCount,
+                repeatIntervalMs = settings.repeatIntervalMinutes * MINUTE_MS,
+                graceMs = OVERDUE_GRACE_MS,
+            )
+            val at = plan.at ?: continue
+            // Момент догоняющего напоминания живёт в приёме — иначе следующая пересборка сдвинет его снова.
+            if (plan.remember) doses.update(dose.copy(remindAt = at))
             scheduler.schedule(dose, at, dose.attempt)
         }
         dropPending(stale)
