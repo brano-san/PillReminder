@@ -21,6 +21,12 @@ moment; press "Taken" and the next dose is counted from the real time you took i
 Go to bed at 3 a.m. or get up at noon — the schedule follows you instead of
 nagging you at the wrong time.
 
+<p align="center">
+  <img src="doc/screenshots/home.png" width="280" alt="Home screen: day timeline and upcoming intakes">
+  &nbsp;&nbsp;&nbsp;
+  <img src="doc/screenshots/history.png" width="280" alt="History: adherence calendar with legend">
+</p>
+
 ## Private and offline by design
 
 DoseDay has no account, no ads and no analytics. The app does not even request
