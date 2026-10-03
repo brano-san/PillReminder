@@ -63,8 +63,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import tech.unispace.pillreminder.data.Settings
-import tech.unispace.pillreminder.update.Updater
-import tech.unispace.pillreminder.ui.UpdateDialog
 import tech.unispace.pillreminder.ui.UpdateSettingsScreen
 import tech.unispace.pillreminder.ui.AdherenceState
 import tech.unispace.pillreminder.ui.ArchiveScreen
@@ -111,15 +109,23 @@ class MainActivity : FragmentActivity() {
     companion object {
         /** «Курс закончился» из шторки открывает экран архива, а не просто главный. */
         const val EXTRA_OPEN_ARCHIVE = "open_archive"
+        /** «Доступна новая версия» из шторки открывает экран обновлений. */
+        const val EXTRA_OPEN_UPDATES = "open_updates"
     }
 
     /** Запрошенный из уведомления экран; читается один раз при запуске и при новом интенте. */
-    private var openArchive by mutableStateOf(false)
+    private var openScreen by mutableStateOf<String?>(null)
+
+    private fun screenFor(intent: Intent?) = when {
+        intent?.getBooleanExtra(EXTRA_OPEN_ARCHIVE, false) == true -> ROUTE_SETUP_ARCHIVE
+        intent?.getBooleanExtra(EXTRA_OPEN_UPDATES, false) == true -> ROUTE_SETUP_UPDATES
+        else -> null
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra(EXTRA_OPEN_ARCHIVE, false)) openArchive = true
+        screenFor(intent)?.let { openScreen = it }
     }
 
     /** Системный запрос отпечатка или кода устройства. */
@@ -176,7 +182,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
 
         val settings = Settings(this)
-        openArchive = intent?.getBooleanExtra(EXTRA_OPEN_ARCHIVE, false) == true
+        openScreen = screenFor(intent)
         setContent {
             PillTheme {
                 // Заливка на всё окно: иначе при открытой клавиатуре внизу видна полоса фона окна.
@@ -187,7 +193,7 @@ class MainActivity : FragmentActivity() {
                     if (!settings.appLockEnabled) LockState.unlocked = true
                     var lockError by remember { mutableStateOf<String?>(null) }
                     if (LockState.unlocked) {
-                        AppRoot(openArchive = openArchive, onArchiveShown = { openArchive = false })
+                        AppRoot(openScreen = openScreen, onScreenShown = { openScreen = null })
                     } else {
                         LockScreen(
                             error = lockError,
@@ -254,7 +260,7 @@ private const val ROUTE_SETUP_WIDGET = "setup/widget"
 private const val ROUTE_SETUP_ARCHIVE = "setup/archive"
 
 @Composable
-private fun AppRoot(openArchive: Boolean = false, onArchiveShown: () -> Unit = {}) {
+private fun AppRoot(openScreen: String? = null, onScreenShown: () -> Unit = {}) {
     val vm: MainViewModel = viewModel()
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
@@ -274,21 +280,13 @@ private fun AppRoot(openArchive: Boolean = false, onArchiveShown: () -> Unit = {
     ) { }
     LaunchedEffect(Unit) { if (settings.tutorialSeen) askNotifications = true }
 
-    // «Курс закончился» из шторки ведёт прямо в архив: там видно, что убралось, и можно вернуть.
-    LaunchedEffect(openArchive) {
-        if (openArchive) {
-            nav.navigate(ROUTE_SETUP_ARCHIVE)
-            onArchiveShown()
+    // Уведомление ведёт на свой экран: «Курс закончился» — в архив, «Доступна версия» — в обновления.
+    LaunchedEffect(openScreen) {
+        openScreen?.let {
+            nav.navigate(it)
+            onScreenShown()
         }
     }
-    // Автопроверка обновлений: раз в сутки при запуске, предложение — диалогом поверх любого экрана.
-    var offerUpdate by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        if (settings.autoUpdate && Updater.checkDue(settings.lastUpdateCheck, System.currentTimeMillis())) {
-            offerUpdate = Updater.check(context) != null
-        }
-    }
-    if (offerUpdate) UpdateDialog(onDismiss = { offerUpdate = false })
 
     LaunchedEffect(askNotifications) {
         if (askNotifications && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

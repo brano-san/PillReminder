@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -15,8 +14,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +39,8 @@ fun UpdateSettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val snackbars = remember { SnackbarHostState() }
     val current = remember { Updater.currentVersion(context) }
+    // Пришли из уведомления или автопроверка включена — сразу показываем, что нового. Выключена — в сеть не ходим.
+    LaunchedEffect(Unit) { if (settings.autoUpdate && state == Updater.State.Idle) Updater.check(context) }
 
     SettingsSubScreen(s.updatesCard, onBack, snackbars) {
         Card(Modifier.fillMaxWidth()) {
@@ -47,6 +48,7 @@ fun UpdateSettingsScreen(onBack: () -> Unit) {
                 SwitchRow(s.updateAutoTitle, s.updateAutoBody, auto) {
                     auto = it
                     settings.autoUpdate = it
+                    Updater.schedule(context)
                 }
             }
         }
@@ -70,7 +72,7 @@ fun UpdateSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-/** Строка состояния, прогресс и список изменений — общие для экрана настроек и диалога на старте. */
+/** Строка состояния, прогресс и список изменений. */
 @Composable
 private fun UpdateStatus(state: Updater.State, current: String) {
     val s = Lang.s
@@ -100,24 +102,3 @@ private fun UpdateStatus(state: Updater.State, current: String) {
     }
 }
 
-/** Предложение обновиться после автопроверки на старте. Закрытие = «позже»: завтра спросим снова. */
-@Composable
-fun UpdateDialog(onDismiss: () -> Unit) {
-    val s = Lang.s
-    val context = LocalContext.current
-    val state by Updater.state.collectAsState()
-    val scope = rememberCoroutineScope()
-    val current = remember { Updater.currentVersion(context) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(s.updatesCard) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { UpdateStatus(state, current) } },
-        confirmButton = {
-            val st = state
-            if (st is Updater.State.Available) {
-                TextButton(onClick = { scope.launch { Updater.install(context, st.release) } }) { Text(s.updateInstall) }
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(s.updateLater) } },
-    )
-}

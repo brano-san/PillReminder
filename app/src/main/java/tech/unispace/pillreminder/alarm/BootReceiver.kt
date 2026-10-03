@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import tech.unispace.pillreminder.container
+import tech.unispace.pillreminder.update.Updater
 
 /** Будильники не переживают перезагрузку и смену времени — восстанавливаем их из базы. */
 class BootReceiver : BroadcastReceiver() {
@@ -35,6 +36,7 @@ class BootReceiver : BroadcastReceiver() {
                 }
                 VisitAlarms.reschedule(app, app.container.db)
                 TrackerAlarms.reschedule(app, app.container.db)
+                Updater.schedule(app)
             } finally {
                 pending.finish()
             }

@@ -253,10 +253,10 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_UPDATE, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_UPDATE, value).apply()
 
-    /** Когда последний раз спрашивали GitHub — состояние устройства, в бэкап не идёт. */
-    var lastUpdateCheck: Long
-        get() = localPrefs.getLong(KEY_LAST_UPDATE_CHECK, 0)
-        set(value) = localPrefs.edit().putLong(KEY_LAST_UPDATE_CHECK, value).apply()
+    /** О какой версии уже сказали уведомлением — чтобы не повторять каждый день. Состояние устройства. */
+    var updateNotifiedVersion: String
+        get() = localPrefs.getString(KEY_UPDATE_NOTIFIED, "") ?: ""
+        set(value) = localPrefs.edit().putString(KEY_UPDATE_NOTIFIED, value).apply()
 
     /** Компактные карточки таблеток на главном экране. */
     var homeCompact: Boolean
@@ -326,7 +326,7 @@ class Settings(context: Context) {
         const val KEY_NOTIFY_COURSE_DONE = "notify_course_done"
         const val KEY_NOTIFY_DAY_DONE = "notify_day_done"
         const val KEY_AUTO_UPDATE = "auto_update"
-        const val KEY_LAST_UPDATE_CHECK = "last_update_check"
+        const val KEY_UPDATE_NOTIFIED = "update_notified_version"
 
         const val THEME_SYSTEM = "system"
         const val THEME_LIGHT = "light"

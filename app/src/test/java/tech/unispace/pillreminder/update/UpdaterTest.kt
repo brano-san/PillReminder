@@ -19,15 +19,6 @@ class UpdaterTest {
     }
 
     @Test
-    fun checksOncePerDay() {
-        val day = 24 * 60 * 60 * 1000L
-        assertTrue(Updater.checkDue(0, day))
-        assertFalse(Updater.checkDue(day, day + day - 1))
-        assertTrue(Updater.checkDue(day, 2 * day))
-        assertTrue(Updater.checkDue(2 * day, day)) // часы перевели назад
-    }
-
-    @Test
     fun parsesReleaseWithApk() {
         val json = """
             {"tag_name":"v1.3.1","body":"Added\r\n- Updates",

@@ -19,10 +19,10 @@ val CHANGELOG: List<ReleaseNotes> = listOf(
         version = "1.3.1",
         date = "",
         ru = listOf(
-            "Обновления прямо из приложения: раз в день оно проверяет новую версию на GitHub, показывает, что изменилось, и ставит её по кнопке «Обновить». Проверку можно выключить в «Настройки» → «Обновления».",
+            "Обновления прямо из приложения: раз в сутки в фоне оно проверяет новую версию на GitHub и присылает тихое уведомление, показывает, что изменилось, и ставит её по кнопке «Обновить». Проверку можно выключить в «Настройки» → «Обновления».",
         ),
         en = listOf(
-            "Updates right from the app: once a day it checks GitHub for a new version, shows what changed and installs it with the \"Update\" button. The check can be turned off in Settings → Updates.",
+            "Updates right from the app: once a day in the background it checks GitHub for a new version, sends a quiet notification, shows what changed and installs it with the \"Update\" button. The check can be turned off in Settings → Updates.",
         ),
     ),
     ReleaseNotes(

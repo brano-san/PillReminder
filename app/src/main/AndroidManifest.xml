@@ -112,6 +112,11 @@
             android:name=".update.UpdateReceiver"
             android:exported="false" />
 
+        <!-- Суточная проверка новой версии в фоне (Updater.schedule). -->
+        <receiver
+            android:name=".update.UpdateCheckReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".alarm.BootReceiver"
             android:exported="true">

@@ -11,6 +11,7 @@ import tech.unispace.pillreminder.data.Settings
 import tech.unispace.pillreminder.ui.Lang
 import tech.unispace.pillreminder.ui.theme.ThemeMode
 import tech.unispace.pillreminder.data.Planner
+import tech.unispace.pillreminder.update.Updater
 
 /** Мини-контейнер вместо DI-фреймворка: зависимостей немного. */
 class AppContainer(context: Context) {
@@ -28,6 +29,8 @@ class App : Application() {
         ThemeMode.code = Settings(this).theme
         container = AppContainer(this)
         Notifications.createChannels(this)
+        // Суточная проверка обновлений: ставится, только если включена, и не переставляется при каждом запуске.
+        Updater.schedule(this)
         // Расписание «по часам» и будильники не должны ждать, пока пользователь что-то нажмёт; параллельный вызов из BootReceiver безопасен — Planner сериализует мутации мьютексом.
         CoroutineScope(Dispatchers.IO).launch { container.planner.rescheduleAlarms() }
     }

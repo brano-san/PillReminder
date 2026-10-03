@@ -1,5 +1,6 @@
 package tech.unispace.pillreminder.update
 
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -20,9 +21,33 @@ import java.net.URL
  */
 object Updater {
     private const val LATEST = "https://api.github.com/repos/brano-san/PillReminder/releases/latest"
-    private const val DAY_MS = 24 * 60 * 60 * 1000L
-    /** requestCode PendingIntent'а статуса установки (диапазоны — в CLAUDE.md). */
+    /** requestCode PendingIntent'ов (диапазоны — в CLAUDE.md). */
     private const val REQUEST_INSTALL = 990_001
+    private const val REQUEST_DAILY = 990_002
+
+    /**
+     * Суточная проверка в фоне — неточным будильником: система сама сдвигает его к другим пробуждениям,
+     * поэтому батарея не тратится отдельно. Выключена автопроверка — будильник снят, в фоне ничего нет.
+     * Уже стоящий будильник не переставляется, иначе каждый запуск процесса откладывал бы проверку на сутки.
+     */
+    fun schedule(context: Context) {
+        val app = context.applicationContext
+        val alarms = app.getSystemService(AlarmManager::class.java)
+        val intent = Intent(app, UpdateCheckReceiver::class.java)
+        if (!Settings(app).autoUpdate) {
+            PendingIntent.getBroadcast(app, REQUEST_DAILY, intent, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)
+                ?.let { alarms.cancel(it); it.cancel() }
+            return
+        }
+        if (PendingIntent.getBroadcast(app, REQUEST_DAILY, intent, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE) != null) return
+        val pending = PendingIntent.getBroadcast(app, REQUEST_DAILY, intent, PendingIntent.FLAG_IMMUTABLE)
+        alarms.setInexactRepeating(
+            AlarmManager.RTC,
+            System.currentTimeMillis() + AlarmManager.INTERVAL_HOUR,
+            AlarmManager.INTERVAL_DAY,
+            pending,
+        )
+    }
 
     data class Release(val version: String, val notes: String, val apkUrl: String, val apkSize: Long)
 
@@ -50,9 +75,6 @@ object Updater {
         }
         return false
     }
-
-    /** Автопроверка — не чаще раза в сутки; часы, переведённые назад, тоже дают проверку. */
-    fun checkDue(lastCheck: Long, now: Long) = now - lastCheck >= DAY_MS || now < lastCheck
 
     /** Ответ `releases/latest` → релиз; null, если к релизу не приложен release-APK. */
     fun parseRelease(json: String): Release? {
@@ -92,7 +114,6 @@ object Updater {
                     conn.disconnect()
                 }
             }
-            Settings(context).lastUpdateCheck = System.currentTimeMillis()
             val newer = release?.takeIf { isNewer(it.version, currentVersion(context)) }
             state.value = if (newer != null) State.Available(newer) else State.UpToDate
             newer

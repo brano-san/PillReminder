@@ -24,6 +24,7 @@ object Notifications {
     const val CHANNEL_VISITS = "doctor_visits"
     /** Опросы трекеров: отдельный канал обычной важности — без всплывающей плашки поверх напоминания о таблетке. */
     const val CHANNEL_TRACKERS = "tracker_prompts"
+    const val CHANNEL_UPDATES = "app_updates"
     const val EXTRA_DOSE_ID = "doseId"
 
     private fun suffix(context: Context): String {
@@ -103,7 +104,11 @@ object Notifications {
             description = s.channelTrackersDesc
         }
 
-        manager.createNotificationChannels(listOf(default, alarm, visits, trackers))
+        // Обновление — не срочно: без звука и баннера, просто строка в шторке.
+        val updates = NotificationChannel(CHANNEL_UPDATES, s.channelUpdatesName, NotificationManager.IMPORTANCE_LOW)
+            .apply { description = s.channelUpdatesDesc }
+
+        manager.createNotificationChannels(listOf(default, alarm, visits, trackers, updates))
     }
 
     /**
@@ -400,6 +405,27 @@ object Notifications {
         notifySafely(context, (COURSE_DONE_ID_BASE + medId).toInt(), builder)
     }
 
+    fun showUpdate(context: Context, version: String) {
+        val s = Lang.s
+        val builder = NotificationCompat.Builder(context, CHANNEL_UPDATES)
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(s.updateAvailable(version))
+            .setContentText(s.updateNotifBody)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    UPDATE_ID,
+                    Intent(context, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        .putExtra(MainActivity.EXTRA_OPEN_UPDATES, true),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        notifySafely(context, UPDATE_ID, builder)
+    }
+
     fun showLowStock(context: Context, medId: Long, name: String, left: Double, form: String) {
         if (!Settings(context).notifyLowStock) return
         val s = Lang.s
@@ -582,6 +608,7 @@ object Notifications {
 
     /** Уведомления «курс закончился»: свой диапазон, чтобы не перезаписать «таблетки заканчиваются». */
     private const val COURSE_DONE_ID_BASE = 710_000L
+    private const val UPDATE_ID = 990_003
 
     /** Уведомление «Пропущено N приёмов · Вернуть» и его время жизни. */
     private const val UNDO_SKIP_ID = 900_002
