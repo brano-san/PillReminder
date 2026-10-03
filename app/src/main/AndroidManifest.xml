@@ -12,6 +12,11 @@
     <!-- Без этого приложения нет в списке «Поверх других приложений» — а он нужен, чтобы открыть
          экран будильника на разблокированном телефоне (Notifications.show). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Обновления из релизов GitHub (update/Updater.kt): проверка версии и скачивание APK. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 12+: следующие обновления ставятся без окна подтверждения. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <application
         android:name=".App"
@@ -100,6 +105,11 @@
 
         <receiver
             android:name=".alarm.ActionReceiver"
+            android:exported="false" />
+
+        <!-- Статус сессии установщика обновления: окно подтверждения или ошибка. -->
+        <receiver
+            android:name=".update.UpdateReceiver"
             android:exported="false" />
 
         <receiver

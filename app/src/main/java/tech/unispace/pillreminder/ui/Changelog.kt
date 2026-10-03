@@ -16,8 +16,18 @@ data class ReleaseNotes(
 
 val CHANGELOG: List<ReleaseNotes> = listOf(
     ReleaseNotes(
-        version = "1.3.0",
+        version = "1.3.1",
         date = "",
+        ru = listOf(
+            "Обновления прямо из приложения: раз в день оно проверяет новую версию на GitHub, показывает, что изменилось, и ставит её по кнопке «Обновить». Проверку можно выключить в «Настройки» → «Обновления».",
+        ),
+        en = listOf(
+            "Updates right from the app: once a day it checks GitHub for a new version, shows what changed and installs it with the \"Update\" button. The check can be turned off in Settings → Updates.",
+        ),
+    ),
+    ReleaseNotes(
+        version = "1.3.0",
+        date = "19.09.2026",
         ru = listOf(
             "Появился архив таблеток: снятые с расписания и закончившиеся курсы можно вернуть в расписание или удалить совсем. Уведомление «Курс закончился» ведёт прямо туда.",
             "Тему можно выбрать: как в системе, светлая или тёмная. Уведомления «Таблетки заканчиваются», «Курс закончился» и «Все приёмы дня отмечены» получили отдельные выключатели.",

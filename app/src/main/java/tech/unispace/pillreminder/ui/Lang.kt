@@ -858,6 +858,19 @@ interface S {
     val changelogCard: String
     val changelogCardSub: String
     val changelogShowAll: String
+    val updatesCard: String
+    fun updatesCardSub(auto: Boolean): String
+    val updateAutoTitle: String
+    val updateAutoBody: String
+    val updateCheckNow: String
+    val updateChecking: String
+    fun updateUpToDate(version: String): String
+    fun updateAvailable(version: String): String
+    val updateInstall: String
+    val updateLater: String
+    fun updateDownloading(percent: Int): String
+    val updateInstalling: String
+    fun updateFailed(message: String): String
     val archiveCard: String
     val archiveCardSub: String
     val archiveEmpty: String
@@ -1885,6 +1898,19 @@ object RU : S {
     override val changelogCard = "Что нового"
     override val changelogCardSub = "История версий приложения"
     override val changelogShowAll = "Показать все версии"
+    override val updatesCard = "Обновления"
+    override fun updatesCardSub(auto: Boolean) = if (auto) "Проверять новую версию раз в день" else "Автопроверка выключена"
+    override val updateAutoTitle = "Проверять обновления"
+    override val updateAutoBody = "Раз в день при запуске приложение спрашивает GitHub о новой версии. Больше ничего в сеть не уходит."
+    override val updateCheckNow = "Проверить сейчас"
+    override val updateChecking = "Проверяем…"
+    override fun updateUpToDate(version: String) = "Установлена последняя версия $version"
+    override fun updateAvailable(version: String) = "Доступна версия $version"
+    override val updateInstall = "Обновить"
+    override val updateLater = "Позже"
+    override fun updateDownloading(percent: Int) = "Скачиваем… $percent %"
+    override val updateInstalling = "Устанавливаем…"
+    override fun updateFailed(message: String) = "Не получилось: $message"
     override val archiveCard = "Архив таблеток"
     override val archiveCardSub = "Снятые с расписания: вернуть или удалить"
     override val archiveEmpty = "Архив пуст. Сюда попадают таблетки, у которых закончился курс, и те, что вы сняли с расписания."
@@ -2902,6 +2928,19 @@ object EN : S {
     override val changelogCard = "What's new"
     override val changelogCardSub = "Version history"
     override val changelogShowAll = "Show all versions"
+    override val updatesCard = "Updates"
+    override fun updatesCardSub(auto: Boolean) = if (auto) "Check for a new version once a day" else "Automatic check is off"
+    override val updateAutoTitle = "Check for updates"
+    override val updateAutoBody = "Once a day on launch the app asks GitHub for a new version. Nothing else is sent."
+    override val updateCheckNow = "Check now"
+    override val updateChecking = "Checking…"
+    override fun updateUpToDate(version: String) = "You have the latest version $version"
+    override fun updateAvailable(version: String) = "Version $version is available"
+    override val updateInstall = "Update"
+    override val updateLater = "Later"
+    override fun updateDownloading(percent: Int) = "Downloading… $percent%"
+    override val updateInstalling = "Installing…"
+    override fun updateFailed(message: String) = "Failed: $message"
     override val archiveCard = "Pill archive"
     override val archiveCardSub = "Off the schedule: restore or delete"
     override val archiveEmpty = "The archive is empty. Pills land here when their course ends or when you take them off the schedule."

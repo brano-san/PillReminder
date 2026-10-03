@@ -63,6 +63,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import tech.unispace.pillreminder.data.Settings
+import tech.unispace.pillreminder.update.Updater
+import tech.unispace.pillreminder.ui.UpdateDialog
+import tech.unispace.pillreminder.ui.UpdateSettingsScreen
 import tech.unispace.pillreminder.ui.AdherenceState
 import tech.unispace.pillreminder.ui.ArchiveScreen
 import tech.unispace.pillreminder.ui.BackupScreen
@@ -242,6 +245,7 @@ private const val ROUTE_SETUP_SOUND = "setup/sound"
 private const val ROUTE_SETUP_DELIVERY = "setup/delivery"
 private const val ROUTE_SETUP_VISITS = "setup/visits"
 private const val ROUTE_SETUP_PRIVACY = "setup/privacy"
+private const val ROUTE_SETUP_UPDATES = "setup/updates"
 private const val ROUTE_SETUP_STOCK = "setup/stock"
 private const val ROUTE_SETUP_CHARTS = "setup/charts"
 private const val ROUTE_SETUP_BACKUP = "setup/backup"
@@ -277,6 +281,15 @@ private fun AppRoot(openArchive: Boolean = false, onArchiveShown: () -> Unit = {
             onArchiveShown()
         }
     }
+    // Автопроверка обновлений: раз в сутки при запуске, предложение — диалогом поверх любого экрана.
+    var offerUpdate by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (settings.autoUpdate && Updater.checkDue(settings.lastUpdateCheck, System.currentTimeMillis())) {
+            offerUpdate = Updater.check(context) != null
+        }
+    }
+    if (offerUpdate) UpdateDialog(onDismiss = { offerUpdate = false })
+
     LaunchedEffect(askNotifications) {
         if (askNotifications && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -428,6 +441,7 @@ private fun AppRoot(openArchive: Boolean = false, onArchiveShown: () -> Unit = {
                     onOpenWidget = { nav.navigate(ROUTE_SETUP_WIDGET) },
                     onOpenTips = { nav.navigate(ROUTE_TIPS) },
                     onOpenArchive = { nav.navigate(ROUTE_SETUP_ARCHIVE) },
+                    onOpenUpdates = { nav.navigate(ROUTE_SETUP_UPDATES) },
                 )
             }
             composable(ROUTE_SETUP_WIDGET) { WidgetSettingsScreen(onBack = { nav.popBackStack() }) }
@@ -437,6 +451,7 @@ private fun AppRoot(openArchive: Boolean = false, onArchiveShown: () -> Unit = {
             composable(ROUTE_SETUP_DELIVERY) { DeliverySettingsScreen(onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_VISITS) { VisitReminderSettingsScreen(onBack = { nav.popBackStack() }, vm = vm) }
             composable(ROUTE_SETUP_PRIVACY) { PrivacySettingsScreen(onBack = { nav.popBackStack() }) }
+            composable(ROUTE_SETUP_UPDATES) { UpdateSettingsScreen(onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_STOCK) { StockSettingsScreen(onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_CHARTS) { ChartSettingsScreen(onBack = { nav.popBackStack() }) }
             composable(ROUTE_SETUP_BACKUP) { BackupScreen(vm = vm, onBack = { nav.popBackStack() }) }

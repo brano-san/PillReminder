@@ -46,6 +46,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.Inventory2
@@ -159,6 +160,7 @@ fun SettingsMenuScreen(
     onOpenWidget: () -> Unit,
     onOpenTips: () -> Unit,
     onOpenArchive: () -> Unit,
+    onOpenUpdates: () -> Unit,
 ) {
     val s = Lang.s
     val context = LocalContext.current
@@ -285,6 +287,12 @@ fun SettingsMenuScreen(
             title = s.changelogCard,
             subtitle = s.changelogCardSub,
             onClick = { showChangelog = true },
+        )
+        SettingsNavCard(
+            icon = { Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = primary) },
+            title = s.updatesCard,
+            subtitle = s.updatesCardSub(settings.autoUpdate),
+            onClick = onOpenUpdates,
         )
 
         // Язык — переключается на месте.
@@ -1446,7 +1454,7 @@ fun ArchiveScreen(vm: MainViewModel, onBack: () -> Unit) {
 // ---------- Общие детали ----------
 
 @Composable
-private fun SwitchRow(title: String, body: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun SwitchRow(title: String, body: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold)

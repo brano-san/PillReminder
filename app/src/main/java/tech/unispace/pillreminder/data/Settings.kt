@@ -248,6 +248,16 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_NOTIFY_DAY_DONE, true)
         set(value) = prefs.edit().putBoolean(KEY_NOTIFY_DAY_DONE, value).apply()
 
+    /** Раз в сутки при запуске спрашивать GitHub о новой версии. */
+    var autoUpdate: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_UPDATE, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_UPDATE, value).apply()
+
+    /** Когда последний раз спрашивали GitHub — состояние устройства, в бэкап не идёт. */
+    var lastUpdateCheck: Long
+        get() = localPrefs.getLong(KEY_LAST_UPDATE_CHECK, 0)
+        set(value) = localPrefs.edit().putLong(KEY_LAST_UPDATE_CHECK, value).apply()
+
     /** Компактные карточки таблеток на главном экране. */
     var homeCompact: Boolean
         get() = prefs.getBoolean(KEY_HOME_COMPACT, false)
@@ -315,6 +325,8 @@ class Settings(context: Context) {
         const val KEY_NOTIFY_LOW_STOCK = "notify_low_stock"
         const val KEY_NOTIFY_COURSE_DONE = "notify_course_done"
         const val KEY_NOTIFY_DAY_DONE = "notify_day_done"
+        const val KEY_AUTO_UPDATE = "auto_update"
+        const val KEY_LAST_UPDATE_CHECK = "last_update_check"
 
         const val THEME_SYSTEM = "system"
         const val THEME_LIGHT = "light"
@@ -330,7 +342,7 @@ class Settings(context: Context) {
             KEY_LANGUAGE, KEY_SOUND_URI, KEY_PRIVATE, KEY_LOW_STOCK, KEY_WAKE_REMIND, KEY_WAKE_REMIND_AT,
             KEY_CHART_SMOOTH, KEY_MINI_POINTS, KEY_VISIT_OFFSETS, KEY_VISIT_CUSTOM,
             KEY_WIDGET_COLOR, KEY_WIDGET_OPACITY, KEY_WIDGET_TEXT, KEY_HOME_COMPACT,
-            KEY_HOME_ACTIONS, KEY_DAY_TIMELINE, KEY_ASK_SLEEP, KEY_THEME,
+            KEY_HOME_ACTIONS, KEY_DAY_TIMELINE, KEY_ASK_SLEEP, KEY_THEME, KEY_AUTO_UPDATE,
             KEY_NOTIFY_LOW_STOCK, KEY_NOTIFY_COURSE_DONE, KEY_NOTIFY_DAY_DONE,
         )
     }

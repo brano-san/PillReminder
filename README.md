@@ -27,10 +27,11 @@ nagging you at the wrong time.
   <img src="doc/screenshots/history.png" width="280" alt="History: adherence calendar with legend">
 </p>
 
-## Private and offline by design
+## Private by design
 
-DoseDay has no account, no ads and no analytics. The app does not even request
-the Internet permission: your schedule, history and notes stay on your phone.
+DoseDay has no account, no ads and no analytics. Your schedule, history and notes stay on your phone:
+the only network request is a daily check of GitHub for a new version, and it
+can be turned off in Settings → Updates.
 Backups are plain files you export and keep yourself. An optional app lock
 (fingerprint or device PIN) and a private mode hide what you take from the lock
 screen, the widget and anyone looking over your shoulder.
