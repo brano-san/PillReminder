@@ -29,6 +29,10 @@ Backups are plain files you export and keep yourself. An optional app lock
 (fingerprint or device PIN) and a private mode hide what you take from the lock
 screen, the widget and anyone looking over your shoulder.
 
+## Free and open source
+
+DoseDay is free and open source under the [MIT license](LICENSE).
+
 ## What it can do
 
 - **Flexible schedules** — from wake-up, at exact clock times, on chosen days of the week, as a fixed course or as needed.
