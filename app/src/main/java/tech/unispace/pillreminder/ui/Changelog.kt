@@ -16,7 +16,7 @@ data class ReleaseNotes(
 
 val CHANGELOG: List<ReleaseNotes> = listOf(
     ReleaseNotes(
-        version = "1.3.1",
+        version = "1.3.0",
         date = "",
         ru = listOf(
             "Появился архив таблеток: снятые с расписания и закончившиеся курсы можно вернуть в расписание или удалить совсем. Уведомление «Курс закончился» ведёт прямо туда.",
@@ -30,25 +30,6 @@ val CHANGELOG: List<ReleaseNotes> = listOf(
             "Отчёт для врача: появился «Журнал приёмов по дням», предпросмотр поднялся выше кнопок и печатается моноширинным шрифтом, термины выровнены.",
             "Разрешение на уведомления спрашивается после туториала, а не поверх первого слайда; слайды стали короче и прокручиваются.",
             "Повторы напоминаний по умолчанию мягче: раз в 10 минут, шесть раз. В уведомлении и на будильнике видно плановое время приёма, после «Пропустить все» приходит «Вернуть».",
-        ),
-        en = listOf(
-            "A pill archive: courses that ended and pills taken off the schedule can be restored or deleted for good. The \"Course finished\" notification leads straight there.",
-            "The theme is now a choice: follow the system, light or dark. \"Pills running out\", \"Course finished\" and \"All of today's intakes marked\" got their own switches.",
-            "Settings are grouped by meaning, \"Reminder repeats\" became \"Reminders\" and says that quiet hours and the wake-up nudge live inside. \"What's new\" and \"Tips\" are in the menu now.",
-            "The pill card is shorter: at most four labels, no duplicated by-clock schedule, stock printed with its unit, and the forecast stops at the end of the course. Overdue intakes moved to their own row with buttons.",
-            "The pill wizard survives a screen rotation, the mode block sits above the number of intakes, the step summary is visible at the top and includes food and amount, and step numbers are tappable.",
-            "\"Ate\" and \"Sleep\" are confirmed by a snackbar with \"Undo\" instead of toasts, and \"Sleep\" always asks first. The day card and the day timeline merged into one.",
-            "The journal shows which day is open; the intake dot tells \"ahead\", \"due\" and \"overdue\" apart; a legend explains the marks, and calendar steps differ in lightness.",
-            "A package photo can be taken with the camera right in the app and opened full screen. The visit calendar opens on the month of the nearest visit, and the visit form survives a trip to the reminder settings.",
-            "Doctor report: a new \"Day-by-day intake log\", the preview moved above the buttons and is printed in a monospace font, wording aligned.",
-            "The notification permission is asked after the tutorial instead of on top of the first slide; slides are shorter and scroll.",
-            "Reminder repeats are gentler by default: every 10 minutes, six times. The notification and the alarm screen show the planned time, and \"Skip all\" is followed by \"Undo\".",
-        ),
-    ),
-    ReleaseNotes(
-        version = "1.3.0",
-        date = "",
-        ru = listOf(
             "Курс «по часам» больше не обрывается в последний день: приёмы этого дня остаются, таблетка уходит в архив только со следующего.",
             "Восстановление проверяет файл: чужой JSON больше не стирает базу, а сообщает, что это не резервная копия. В бэкап теперь попадают настройки и группы, а «разносить с этими таблетками» переживает перенос на новый телефон.",
             "«Сон» переспрашивает, если остались неотмеченные приёмы, и говорит сколько их.",
@@ -65,6 +46,17 @@ val CHANGELOG: List<ReleaseNotes> = listOf(
             "Удаление заметки, визита, записи каталога, записи трекера и отметки «Еда» можно отменить. Формы переспрашивают о несохранённом. Крестик у времени «по часам» действительно удаляет время, а под заблокированной кнопкой мастера видно, чего не хватает.",
         ),
         en = listOf(
+            "A pill archive: courses that ended and pills taken off the schedule can be restored or deleted for good. The \"Course finished\" notification leads straight there.",
+            "The theme is now a choice: follow the system, light or dark. \"Pills running out\", \"Course finished\" and \"All of today's intakes marked\" got their own switches.",
+            "Settings are grouped by meaning, \"Reminder repeats\" became \"Reminders\" and says that quiet hours and the wake-up nudge live inside. \"What's new\" and \"Tips\" are in the menu now.",
+            "The pill card is shorter: at most four labels, no duplicated by-clock schedule, stock printed with its unit, and the forecast stops at the end of the course. Overdue intakes moved to their own row with buttons.",
+            "The pill wizard survives a screen rotation, the mode block sits above the number of intakes, the step summary is visible at the top and includes food and amount, and step numbers are tappable.",
+            "\"Ate\" and \"Sleep\" are confirmed by a snackbar with \"Undo\" instead of toasts, and \"Sleep\" always asks first. The day card and the day timeline merged into one.",
+            "The journal shows which day is open; the intake dot tells \"ahead\", \"due\" and \"overdue\" apart; a legend explains the marks, and calendar steps differ in lightness.",
+            "A package photo can be taken with the camera right in the app and opened full screen. The visit calendar opens on the month of the nearest visit, and the visit form survives a trip to the reminder settings.",
+            "Doctor report: a new \"Day-by-day intake log\", the preview moved above the buttons and is printed in a monospace font, wording aligned.",
+            "The notification permission is asked after the tutorial instead of on top of the first slide; slides are shorter and scroll.",
+            "Reminder repeats are gentler by default: every 10 minutes, six times. The notification and the alarm screen show the planned time, and \"Skip all\" is followed by \"Undo\".",
             "A by-clock course no longer ends a day early: the last day keeps its intakes, and the pill is archived only the next day.",
             "Restore checks the file: a foreign JSON no longer wipes the database. Backups now carry settings and groups, and \"keep apart from these pills\" survives a move to a new phone.",
             "\"Sleep\" asks again when unmarked intakes remain, and says how many.",
