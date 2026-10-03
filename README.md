@@ -9,6 +9,7 @@
 <p align="center">
   <a href="https://github.com/brano-san/PillReminder/releases/latest"><img src="https://img.shields.io/github/v/release/brano-san/PillReminder?label=release&color=2E7D6F" alt="Latest release"></a>
   <a href="https://github.com/brano-san/PillReminder/actions/workflows/android.yml"><img src="https://github.com/brano-san/PillReminder/actions/workflows/android.yml/badge.svg" alt="Build status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2E7D6F" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/Android-8.0%2B-2E7D6F?logo=android&logoColor=white" alt="Android 8.0+">
 </p>
 
