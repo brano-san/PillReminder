@@ -63,3 +63,5 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: app/build/outputs/apk/release/*.apk
           generate_release_notes: true
+          # Старый тег не должен отбирать метку Latest у текущего релиза.
+          make_latest: ${{ inputs.tag && 'false' || 'true' }}
